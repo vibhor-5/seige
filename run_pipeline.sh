@@ -98,8 +98,16 @@ try:
     payload["data"] = json.loads(raw_data)
 except Exception:
     payload["data"] = {"raw": raw_data}
-with open(os.environ["DEBUG_LOG_PATH"], "a", encoding="utf-8") as fp:
-    fp.write(json.dumps(payload, ensure_ascii=True) + "\n")
+try:
+    log_path = os.environ["DEBUG_LOG_PATH"]
+    log_dir = os.path.dirname(log_path)
+    if log_dir:
+        os.makedirs(log_dir, exist_ok=True)
+    with open(log_path, "a", encoding="utf-8") as fp:
+        fp.write(json.dumps(payload, ensure_ascii=True) + "\n")
+except Exception:
+    # Never fail the training pipeline due to debug logging issues.
+    pass
 PY
 }
 
