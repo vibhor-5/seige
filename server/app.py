@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 
 from openenv.core.env_server.http_server import create_app
 
@@ -15,6 +16,16 @@ app = create_app(
     env_name="seige",
     max_concurrent_envs=4,
 )
+
+
+@app.get("/health")
+def health() -> dict[str, str | bool | None]:
+    return {
+        "ok": True,
+        "server": "openenv",
+        "target_backend": os.getenv("SEIGE_TARGET_BACKEND", "transformerlens"),
+        "target_model": os.getenv("SEIGE_TARGET_MODEL_ID"),
+    }
 
 
 def main(host: str = "0.0.0.0", port: int = 8000) -> None:

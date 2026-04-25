@@ -25,6 +25,7 @@ hf = [
     "torchvision==0.21.0",
     "torchaudio==2.6.0",
     "transformers==5.5.0",
+    "transformer-lens",
     "scikit-learn==1.8.0",
 ]
 train = [

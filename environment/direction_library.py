@@ -23,10 +23,17 @@ INTENT_CLASSES = ["benign", "escalation", "extraction", "distraction"]
 class DirectionLibrary:
     def __init__(
         self,
-        library_path: str = "data/direction_library.json",
-        probe_path: str = "data/intent_probes.pkl",
+        library_path: str | None = None,
+        probe_path: str | None = None,
         hidden_size: int = 1024,
     ) -> None:
+        tools_dir = os.getenv("SEIGE_WHITEBOX_TOOLS_DIR", "data/whitebox_tools")
+        if library_path is None:
+            candidate = os.path.join(tools_dir, "direction_library.json")
+            library_path = candidate if os.path.exists(candidate) else "data/direction_library.json"
+        if probe_path is None:
+            candidate = os.path.join(tools_dir, "intent_probes.pkl")
+            probe_path = candidate if os.path.exists(candidate) else "data/intent_probes.pkl"
         self.hidden_size = hidden_size
         self._vectors: dict[str, list[float]] = {}
         self._intent_probes: dict[int, Any] = {}

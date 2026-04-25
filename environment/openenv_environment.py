@@ -44,7 +44,7 @@ class SeigeOpenEnv(Environment[SeigeAction, SeigeObservation, State]):
         self._step_count += 1
 
         observation = result.get("observation", {})
-        current_agent = action.agent_type
+        current_agent = result.get("current_agent", action.agent_type)
         red = observation if current_agent == "red" else None
         blue = observation if current_agent == "blue" else None
 

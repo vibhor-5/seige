@@ -56,23 +56,42 @@ class SeigeClient:
         self.timeout = timeout
 
     def reset(self) -> dict:
-        payload = self._post("/reset", {}).json()
+        payload = self._json(self._post("/reset", {}), "/reset")
         return payload.get("observation", payload)
 
     def step(self, action: dict[str, Any]) -> dict:
-        payload = self._post("/step", {"action": action}).json()
+        payload = self._json(self._post("/step", action), "/step")
         observation = payload.get("observation")
         if isinstance(observation, dict) and "current_agent" in observation:
             current_agent = observation.get("current_agent")
             if current_agent in {"red", "blue"}:
                 payload["observation"] = observation.get(current_agent) or {}
+                payload["current_agent"] = current_agent
+        elif "current_agent" in payload:
+            current_agent = payload.get("current_agent")
+            if current_agent in {"red", "blue"}:
+                payload = {
+                    "observation": payload.get(current_agent) or {},
+                    "reward": payload.get("reward"),
+                    "done": payload.get("done", False),
+                    "info": payload.get("info", {}),
+                }
         return payload
 
     def state(self) -> dict:
-        return requests.get(f"{self.base_url}/state", timeout=self.timeout).json()
+        return self._json(requests.get(f"{self.base_url}/state", timeout=self.timeout), "/state")
 
     def health(self) -> dict:
-        return requests.get(f"{self.base_url}/health", timeout=self.timeout).json()
+        return self._json(requests.get(f"{self.base_url}/health", timeout=self.timeout), "/health")
 
     def _post(self, path: str, payload: dict[str, Any]):
         return requests.post(f"{self.base_url}{path}", json=payload, timeout=self.timeout)
+
+    @staticmethod
+    def _json(response, path: str) -> dict:
+        try:
+            response.raise_for_status()
+            return response.json()
+        except Exception as exc:
+            body = getattr(response, "text", "")
+            raise RuntimeError(f"SeigeClient {path} failed: {exc}; body={body[:500]!r}") from exc

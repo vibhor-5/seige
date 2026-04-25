@@ -61,7 +61,7 @@ def _parse_blue(data: dict[str, Any]) -> BlueAction:
             )
         return BlueAction(
             action_type=BlueActionType(data["action_type"]),
-            session_id=str(data["session_id"]),
+            session_id=str(data.get("session_id", "")),
             layer=_optional_int(data.get("layer")),
             explanation=explanation,
             patch_reference=str(data.get("patch_reference", "clean")),
