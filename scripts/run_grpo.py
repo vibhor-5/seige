@@ -13,7 +13,33 @@ def _patch_torch_inductor_for_unsloth() -> None:
             pass
         torch._inductor.config = _CompatInductorConfig
 
+def _patch_torch_dtypes_for_torchao() -> None:
+    # Some TorchAO builds expect experimental dtypes (torch.int1, etc.) that
+    # are absent in older Torch wheels. Map them to nearest available types so
+    # imports succeed (these paths are not used in our 4-bit LoRA flow).
+    fallback_map = {
+        "int1": torch.int8,
+        "int2": torch.int8,
+        "int3": torch.int8,
+        "int4": torch.int8,
+        "int5": torch.int8,
+        "int6": torch.int8,
+        "int7": torch.int8,
+        "uint1": torch.uint8,
+        "uint2": torch.uint8,
+        "uint3": torch.uint8,
+        "uint4": torch.uint8,
+        "uint5": torch.uint8,
+        "uint6": torch.uint8,
+        "uint7": torch.uint8,
+    }
+    for name, fallback in fallback_map.items():
+        if not hasattr(torch, name):
+            setattr(torch, name, fallback)
+
+os.environ.setdefault("TRANSFORMERS_NO_TORCHAO", "1")
 _patch_torch_inductor_for_unsloth()
+_patch_torch_dtypes_for_torchao()
 
 from unsloth import FastLanguageModel, PatchFastRL
 # Patch TRL to use Unsloth's optimized GRPO implementation
