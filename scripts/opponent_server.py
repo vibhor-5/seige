@@ -112,7 +112,13 @@ if __name__ == "__main__":
     )
     
     if os.path.exists(args.adapter_path):
-        model.load_adapter(args.adapter_path)
+        adapter_name = f"frozen_{args.agent_type}"
+        try:
+            model.load_adapter(args.adapter_path, adapter_name=adapter_name, is_trainable=False)
+        except TypeError:
+            model.load_adapter(args.adapter_path, adapter_name)
+        if hasattr(model, "set_adapter"):
+            model.set_adapter(adapter_name)
         print(f"Loaded frozen adapter: {args.adapter_path}")
     else:
         print(f"WARNING: Adapter path not found. Running frozen baseline.")

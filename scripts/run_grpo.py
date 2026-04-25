@@ -332,6 +332,18 @@ def _clear_generation_config_max_length(model) -> None:
                 pass
 
 
+def _load_init_adapter(model, adapter_path: str, agent_type: str) -> None:
+    """Load a previous LoRA adapter as the active trainable adapter across PEFT API versions."""
+    adapter_name = f"{agent_type}_init"
+    try:
+        model.load_adapter(adapter_path, adapter_name=adapter_name, is_trainable=True)
+    except TypeError:
+        # Older PEFT/Transformers adapter loaders used positional args.
+        model.load_adapter(adapter_path, adapter_name)
+    if hasattr(model, "set_adapter"):
+        model.set_adapter(adapter_name)
+
+
 def _latest_checkpoint_dir(output_dir: str) -> str | None:
     base = Path(output_dir)
     if not base.exists():
@@ -390,7 +402,7 @@ def main():
     # Load initialization weights on top of our PEFT model.
     if os.path.exists(args.init_adapter):
         print(f"Applying init adapter from {args.init_adapter}")
-        model.load_adapter(args.init_adapter)
+        _load_init_adapter(model, args.init_adapter, args.agent_type)
     else:
         print(f"WARNING: Init adapter '{args.init_adapter}' not found. Training from base model.")
 
