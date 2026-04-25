@@ -43,7 +43,7 @@ To ensure your training doesn't get killed if you accidentally close your browse
 tmux new -s training
 ```
 
-Now, set your Weights & Biases API key and run the sequential alternating loop (Red then Blue per cycle):
+Now, set your Weights & Biases API key and run the sequential alternating loop (Red then Blue per cycle). Optional: push each leg’s final adapter to a **Hugging Face model repo** the first time a leg finishes (the repo is **created if it does not exist**; you must still create a [HF access token](https://huggingface.co/settings/tokens) with write access).
 ```bash
 export WANDB_API_KEY="your_wandb_api_key_here"
 export SEQUENTIAL_MODE=1
@@ -51,6 +51,12 @@ export NUM_CYCLES=3
 export GRPO_MAX_STEPS=200
 export NUM_EPISODES=100
 export INIT_ADAPTER_PATH="sft_adapter"
+
+# Optional: auto-upload after each leg (e.g. red_cycle_1/, blue_cycle_1/, ... under the repo)
+export SEIGE_HF_PUSH=1
+export SEIGE_HF_REPO_ID="YOUR_USERNAME/seige-grpo-checkpoints"   # pick a new, empty repo name
+export HF_TOKEN="hf_YourWriteToken"                               # or: export HUGGINGFACE_HUB_TOKEN=...
+# export SEIGE_HF_PRIVATE=1   # if you want the *new* repo to be private on first create
 
 # Run the master pipeline
 ./run_pipeline.sh
@@ -61,23 +67,22 @@ export INIT_ADAPTER_PATH="sft_adapter"
 2. It alternates training in a loop: **train Red against frozen Blue, then train Blue against the newly trained Red**.
 3. After each leg, it saves the adapter and uses it as the next frozen opponent.
 4. It repeats this for `NUM_CYCLES` and outputs live metrics to Weights & Biases.
-5. Once complete, it automatically triggers `evaluate.py` using the latest Red and Blue adapters.
+5. If `SEIGE_HF_PUSH=1`, it uploads the archived **cycle** adapter to your HF repo (e.g. `red_cycle_1/`, `blue_cycle_1/`, …) so a lost pod does not lose the last full leg.
+6. Once complete, it automatically triggers `evaluate.py` using the latest Red and Blue adapters.
 
-## Step 6: Save Your New Agent!
-When the script prints **"Pipeline finished successfully!"**, your brand new agent adapter has been saved to `outputs_grpo/grpo_red/final_adapter`.
+## Step 6: Save your new agent (Hugging Face)
+When the script prints **"Pipeline finished successfully!"**, adapters are under `outputs_grpo/`. If you set `SEIGE_HF_PUSH=1` (Step 5), the **last completed leg of each type** is already in your HF model repo in subfolders such as `red_cycle_1/`, `blue_cycle_1/`, etc. You can add a manual top-level upload of `final_adapter` the same way if you want a separate “latest”-only repo; otherwise the pipeline upload is enough for crash safety between legs.
 
-**Do not delete the Pod yet!** RunPod instances are ephemeral. If you terminate the Pod, your new model is destroyed.
+**Do not delete the Pod** until you have the artifacts you need on Hugging Face or in persistent storage, because instance disks are ephemeral.
 
-You must upload the newly trained model back to Hugging Face to save it:
+To upload by hand (same as the pipeline), set `HF_TOKEN` and run:
 ```bash
-uv run python -c "
-from huggingface_hub import HfApi
-api = HfApi()
-api.create_repo('BART-ender/seige-grpo-red', exist_ok=True)
-api.upload_folder(folder_path='outputs_grpo/grpo_red/final_adapter', repo_id='BART-ender/seige-grpo-red')
-print('Upload complete!')
-"
+python3 scripts/upload_adapter_to_hf.py \
+  --local-dir outputs_grpo/cycles/red_cycle_1 \
+  --repo-id YOUR_USERNAME/seige-grpo-checkpoints \
+  --path-in-repo red_cycle_1
 ```
+This creates the model repo on first use if it does not exist, then syncs that folder to the `path-in-repo` subpath.
 
 ## Step 7: Single-Agent Backward-Compatible Mode (Optional)
 If you still want one-off training for only one side, disable sequential mode:

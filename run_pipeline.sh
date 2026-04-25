@@ -13,6 +13,10 @@ TORCH_INDEX_URL=${TORCH_INDEX_URL:-"https://download.pytorch.org/whl/cu121"}
 SEIGE_FAST_INFERENCE=${SEIGE_FAST_INFERENCE:-"0"}
 TORCH_MIN_VERSION=${TORCH_MIN_VERSION:-"2.5.1"}
 RESUME_PIPELINE=${RESUME_PIPELINE:-"1"}
+# Hugging Face: after each leg, push the archived cycle adapter (requires HF_TOKEN and SEIGE_HF_REPO_ID).
+SEIGE_HF_PUSH=${SEIGE_HF_PUSH:-"0"}
+SEIGE_HF_REPO_ID=${SEIGE_HF_REPO_ID:-""}
+SEIGE_HF_PRIVATE=${SEIGE_HF_PRIVATE:-"0"}
 
 # Backward-compatible single-agent values.
 AGENT_TO_TRAIN=${AGENT_TO_TRAIN:-"red"}
@@ -42,6 +46,11 @@ if [ -n "$WANDB_API_KEY" ]; then
     echo "WandB Logging: ENABLED"
 else
     echo "WandB Logging: DISABLED (Set WANDB_API_KEY to enable)"
+fi
+if [ "$SEIGE_HF_PUSH" = "1" ]; then
+    echo "Hugging Face upload: ENABLED -> repo ${SEIGE_HF_REPO_ID:-?} (per-cycle subfolders, repo created if missing)"
+else
+    echo "Hugging Face upload: DISABLED (set SEIGE_HF_PUSH=1 and SEIGE_HF_REPO_ID to enable after each leg)"
 fi
 echo "========================================"
 
@@ -307,6 +316,36 @@ write_state() {
 EOF
 }
 
+hf_upload_if_enabled() {
+    local path_in_repo=$1
+    local local_dir=$2
+    if [ "$SEIGE_HF_PUSH" != "1" ]; then
+        return 0
+    fi
+    if [ -z "$SEIGE_HF_REPO_ID" ]; then
+        echo "ERROR: SEIGE_HF_PUSH=1 but SEIGE_HF_REPO_ID is not set" >&2
+        exit 1
+    fi
+    if [ -z "${HF_TOKEN:-}" ] && [ -z "${HUGGINGFACE_HUB_TOKEN:-}" ]; then
+        echo "ERROR: SEIGE_HF_PUSH=1 but HF_TOKEN (or HUGGINGFACE_HUB_TOKEN) is not set" >&2
+        exit 1
+    fi
+    if [ ! -d "$local_dir" ]; then
+        echo "ERROR: upload source is not a directory: $local_dir" >&2
+        exit 1
+    fi
+    PRIV=()
+    if [ "$SEIGE_HF_PRIVATE" = "1" ]; then
+        PRIV=(--private)
+    fi
+    echo "Uploading adapter to Hugging Face: $SEIGE_HF_REPO_ID (path: $path_in_repo) from $local_dir"
+    "$PYTHON_BIN" scripts/upload_adapter_to_hf.py \
+        --local-dir "$local_dir" \
+        --repo-id "$SEIGE_HF_REPO_ID" \
+        --path-in-repo "$path_in_repo" \
+        "${PRIV[@]}"
+}
+
 load_state_if_requested() {
     if [ "$RESUME_PIPELINE" != "1" ]; then
         return
@@ -362,6 +401,7 @@ if [ "$SEQUENTIAL_MODE" == "1" ]; then
             cp -R "$RED_LATEST" "$RED_ARCHIVE"
             echo "Saved RED checkpoint: $RED_LATEST"
             echo "Archived RED cycle checkpoint: $RED_ARCHIVE"
+            hf_upload_if_enabled "red_cycle_${cycle}" "$RED_ARCHIVE"
             next_agent="blue"
             write_state "$cycle" "$next_agent" "$RED_LATEST" "$BLUE_LATEST"
             continue
@@ -374,6 +414,7 @@ if [ "$SEQUENTIAL_MODE" == "1" ]; then
         cp -R "$BLUE_LATEST" "$BLUE_ARCHIVE"
         echo "Saved BLUE checkpoint: $BLUE_LATEST"
         echo "Archived BLUE cycle checkpoint: $BLUE_ARCHIVE"
+        hf_upload_if_enabled "blue_cycle_${cycle}" "$BLUE_ARCHIVE"
         cycle=$((cycle + 1))
         next_agent="red"
         write_state "$cycle" "$next_agent" "$RED_LATEST" "$BLUE_LATEST"
@@ -399,9 +440,11 @@ else
     if [ "$AGENT_TO_TRAIN" == "red" ]; then
         RED_LATEST="$OUTPUT_DIR/grpo_red/final_adapter"
         BLUE_LATEST="$FROZEN_ADAPTER_PATH"
+        hf_upload_if_enabled "grpo_red_single" "$RED_LATEST"
     else
         RED_LATEST="$FROZEN_ADAPTER_PATH"
         BLUE_LATEST="$OUTPUT_DIR/grpo_blue/final_adapter"
+        hf_upload_if_enabled "grpo_blue_single" "$BLUE_LATEST"
     fi
 fi
 
