@@ -333,6 +333,8 @@ def _agent_observation(obs: dict, agent_type: str) -> dict:
 def _request_opponent_action(obs: dict) -> dict:
     import requests
 
+    if os.getenv("SEIGE_USE_FALLBACK_OPPONENT", "0") == "1":
+        return {}
     try:
         timeout = float(os.getenv("SEIGE_OPPONENT_TIMEOUT", "10"))
         opp = requests.post("http://localhost:8001/act", json={"obs": obs}, timeout=timeout).json()

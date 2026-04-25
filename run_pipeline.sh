@@ -466,6 +466,11 @@ start_opponent_server() {
     local adapter_path=$2
 
     kill ${OPP_PID:-} 2>/dev/null || true
+    if [ "${SEIGE_USE_FALLBACK_OPPONENT:-0}" = "1" ]; then
+        echo "Skipping Frozen Opponent server; reward rollouts use deterministic fallback $opponent_type actions."
+        OPP_PID=""
+        return
+    fi
 
     echo "Starting Frozen Opponent ($opponent_type) on port $PORT_OPPONENT with $adapter_path..."
     "$PYTHON_BIN" scripts/opponent_server.py \
