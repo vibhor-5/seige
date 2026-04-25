@@ -3,6 +3,7 @@ import json
 import argparse
 import math
 import hashlib
+import warnings
 import torch
 from typing import List
 from collections import defaultdict
@@ -170,6 +171,44 @@ def _reward_weights() -> dict[str, float]:
         "repeat_penalty": float(os.getenv("SEIGE_REWARD_W_REPEAT_PENALTY", "0.12")),
     }
 
+def _suppress_noisy_train_warnings() -> None:
+    """TRL/Unsloth + Qwen pass both generation_config and kwargs; Transformers 5.5+ warns. TRL v5.10 will move mask utils."""
+    warnings.filterwarnings("ignore", message="Passing `generation_config`", category=UserWarning)
+    warnings.filterwarnings("ignore", message="Both `max_new_tokens`", category=UserWarning)
+    warnings.filterwarnings("ignore", message="`use_return_dict` is deprecated", category=FutureWarning)
+    warnings.filterwarnings("ignore", message="`use_return_dict` is deprecated", category=UserWarning)
+    warnings.filterwarnings("ignore", category=FutureWarning, module="transformers.modeling_attn_mask_utils")
+
+
+def _clear_generation_config_max_length(model) -> None:
+    """GRPO/TRL uses max_new_tokens; Qwen2.5 ships max_length=32768 on generation_config — avoids duplicate limit warnings."""
+    seen: set[int] = set()
+    stack: list = [model]
+    while stack:
+        m = stack.pop()
+        if m is None:
+            continue
+        mid = id(m)
+        if mid in seen:
+            continue
+        seen.add(mid)
+        cfg = getattr(m, "generation_config", None)
+        if cfg is not None and getattr(cfg, "max_length", None) is not None:
+            try:
+                cfg.max_length = None
+            except Exception:
+                pass
+        for child in (getattr(m, "model", None), getattr(m, "base_model", None)):
+            if child is not None:
+                stack.append(child)
+        gbm = getattr(m, "get_base_model", None)
+        if callable(gbm):
+            try:
+                stack.append(gbm())
+            except Exception:
+                pass
+
+
 def _latest_checkpoint_dir(output_dir: str) -> str | None:
     base = Path(output_dir)
     if not base.exists():
@@ -199,7 +238,8 @@ def _scheduled_format_weight(base_weight: float, reward_call_idx: int) -> float:
 
 def main():
     args = parse_args()
-    
+    _suppress_noisy_train_warnings()
+
     print(f"--- Setting up GRPO Training for {args.agent_type.upper()} Agent ---")
     
     print("Loading Seige Client...")
@@ -233,6 +273,7 @@ def main():
         print(f"WARNING: Init adapter '{args.init_adapter}' not found. Training from base model.")
 
     _ensure_trl_warnings_issued_attr(model)
+    _clear_generation_config_max_length(model)
 
     recent_action_counts = defaultdict(int)
     reward_call_idx = {"value": 0}
