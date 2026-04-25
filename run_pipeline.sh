@@ -59,6 +59,8 @@ if [ -z "$PYTHON_BIN" ]; then
     exit 1
 fi
 
+export TRANSFORMERS_NO_TORCHAO=1
+
 install_dependencies() {
     echo "[0/4] Bootstrapping Python dependencies..."
     local PIP_CMD="$PYTHON_BIN -m pip install"
@@ -99,6 +101,20 @@ install_dependencies() {
 
     echo "Installing Python requirements from requirements.txt..."
     $PIP_CMD -r requirements.txt
+
+    # Some dependency graphs can re-introduce torchao transitively. Remove it
+    # again after full requirements installation and verify it's gone.
+    if [ "$UNINSTALL_TORCHAO" == "1" ]; then
+        echo "Re-checking torchao after requirements install..."
+        "$PYTHON_BIN" -m pip uninstall -y torchao >/dev/null 2>&1 || true
+        if "$PYTHON_BIN" -c "import importlib.util; raise SystemExit(0 if importlib.util.find_spec('torchao') is None else 1)"; then
+            echo "TorchAO is not present."
+        else
+            echo "ERROR: torchao still present after uninstall attempts."
+            "$PYTHON_BIN" -m pip show torchao || true
+            exit 1
+        fi
+    fi
 
     # Validate critical imports before starting servers/training.
     "$PYTHON_BIN" -c "import datasets, requests, fastapi, uvicorn, trl, peft, wandb"
