@@ -11,6 +11,7 @@ INSTALL_DEPS=${INSTALL_DEPS:-"1"}
 UNINSTALL_TORCHAO=${UNINSTALL_TORCHAO:-"1"}
 TORCH_INDEX_URL=${TORCH_INDEX_URL:-"https://download.pytorch.org/whl/cu121"}
 SEIGE_FAST_INFERENCE=${SEIGE_FAST_INFERENCE:-"0"}
+TORCH_MIN_VERSION=${TORCH_MIN_VERSION:-"2.5.1"}
 
 # Backward-compatible single-agent values.
 AGENT_TO_TRAIN=${AGENT_TO_TRAIN:-"red"}
@@ -34,6 +35,7 @@ echo "Install Dependencies: $INSTALL_DEPS"
 echo "Uninstall TorchAO: $UNINSTALL_TORCHAO"
 echo "Torch Index URL: $TORCH_INDEX_URL"
 echo "SEIGE_FAST_INFERENCE: $SEIGE_FAST_INFERENCE"
+echo "TORCH_MIN_VERSION: $TORCH_MIN_VERSION"
 if [ -n "$WANDB_API_KEY" ]; then
     echo "WandB Logging: ENABLED"
 else
@@ -129,13 +131,13 @@ install_dependencies() {
         echo "Torch not found. Installing torch/torchvision/torchaudio via pip from $TORCH_INDEX_URL"
         "$PYTHON_BIN" -m ensurepip --upgrade >/dev/null 2>&1 || true
         "$PYTHON_BIN" -m pip install --upgrade pip setuptools wheel >/dev/null 2>&1 || true
-        "$PYTHON_BIN" -m pip install --index-url "$TORCH_INDEX_URL" torch torchvision torchaudio
+        "$PYTHON_BIN" -m pip install --index-url "$TORCH_INDEX_URL" "torch>=$TORCH_MIN_VERSION" torchvision torchaudio
     fi
 
     # Hard verification + fallback path when uv/pip environment wiring is inconsistent.
     if ! "$PYTHON_BIN" -c "import torch; print(torch.__version__)" >/dev/null 2>&1; then
         echo "Torch import still failing after pip install. Retrying with no cache..."
-        "$PYTHON_BIN" -m pip install --no-cache-dir --index-url "$TORCH_INDEX_URL" torch torchvision torchaudio
+        "$PYTHON_BIN" -m pip install --no-cache-dir --index-url "$TORCH_INDEX_URL" "torch>=$TORCH_MIN_VERSION" torchvision torchaudio
     fi
 
     if ! "$PYTHON_BIN" -c "import torch; print(torch.__version__)" >/dev/null 2>&1; then
@@ -145,6 +147,29 @@ install_dependencies() {
         exit 1
     else
         echo "Torch is available."
+    fi
+    # #region agent log
+    debug_log "H6" "run_pipeline.sh:install_dependencies:torch_api_compat" "Torch API compatibility probe" "$("$PYTHON_BIN" - <<'PY'
+import json
+import torch
+print(json.dumps({
+    "torch_version": torch.__version__,
+    "has_set_submodule": hasattr(torch.nn.Module, "set_submodule"),
+}))
+PY
+)"
+    # #endregion
+
+    # Transformers 5.x quantization path requires torch.nn.Module.set_submodule.
+    if ! "$PYTHON_BIN" -c "import torch; raise SystemExit(0 if hasattr(torch.nn.Module, 'set_submodule') else 1)"; then
+        echo "Torch API incompatible (missing nn.Module.set_submodule). Upgrading torch stack..."
+        "$PYTHON_BIN" -m pip install --upgrade --index-url "$TORCH_INDEX_URL" "torch>=$TORCH_MIN_VERSION" torchvision torchaudio
+    fi
+
+    if ! "$PYTHON_BIN" -c "import torch; raise SystemExit(0 if hasattr(torch.nn.Module, 'set_submodule') else 1)"; then
+        echo "ERROR: Torch is installed but still lacks nn.Module.set_submodule."
+        "$PYTHON_BIN" -c "import torch, sys; print('torch=', torch.__version__); print('executable=', sys.executable)"
+        exit 1
     fi
     # #region agent log
     debug_log "H2" "run_pipeline.sh:install_dependencies:torch_check" "Torch verification complete" "$("$PYTHON_BIN" - <<'PY'
