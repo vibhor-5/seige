@@ -12,6 +12,7 @@ UNINSTALL_TORCHAO=${UNINSTALL_TORCHAO:-"1"}
 TORCH_INDEX_URL=${TORCH_INDEX_URL:-"https://download.pytorch.org/whl/cu121"}
 SEIGE_FAST_INFERENCE=${SEIGE_FAST_INFERENCE:-"0"}
 TORCH_MIN_VERSION=${TORCH_MIN_VERSION:-"2.5.1"}
+RESUME_PIPELINE=${RESUME_PIPELINE:-"1"}
 
 # Backward-compatible single-agent values.
 AGENT_TO_TRAIN=${AGENT_TO_TRAIN:-"red"}
@@ -36,6 +37,7 @@ echo "Uninstall TorchAO: $UNINSTALL_TORCHAO"
 echo "Torch Index URL: $TORCH_INDEX_URL"
 echo "SEIGE_FAST_INFERENCE: $SEIGE_FAST_INFERENCE"
 echo "TORCH_MIN_VERSION: $TORCH_MIN_VERSION"
+echo "Resume Pipeline: $RESUME_PIPELINE"
 if [ -n "$WANDB_API_KEY" ]; then
     echo "WandB Logging: ENABLED"
 else
@@ -47,6 +49,7 @@ RED_LATEST="$SFT_ADAPTER_PATH"
 BLUE_LATEST="$SFT_ADAPTER_PATH"
 ENV_PID=""
 OPP_PID=""
+STATE_FILE="$OUTPUT_DIR/pipeline_state.json"
 
 # Cleanup function to kill background processes on exit
 cleanup() {
@@ -289,7 +292,45 @@ train_leg() {
         --output_dir "$OUTPUT_DIR" \
         --num_episodes "$NUM_EPISODES" \
         --max_steps "$GRPO_MAX_STEPS" \
-        --run_name "seige-grpo-${trainee}-cycle${cycle}"
+        --run_name "seige-grpo-${trainee}-cycle${cycle}" \
+        --resume_if_possible
+}
+
+write_state() {
+    local cycle=$1
+    local next_agent=$2
+    local red_latest=$3
+    local blue_latest=$4
+    mkdir -p "$OUTPUT_DIR"
+    cat > "$STATE_FILE" <<EOF
+{"cycle":$cycle,"next_agent":"$next_agent","red_latest":"$red_latest","blue_latest":"$blue_latest","num_cycles":$NUM_CYCLES}
+EOF
+}
+
+load_state_if_requested() {
+    if [ "$RESUME_PIPELINE" != "1" ]; then
+        return
+    fi
+    if [ ! -f "$STATE_FILE" ]; then
+        return
+    fi
+    echo "Found existing pipeline state at $STATE_FILE. Resuming..."
+    local loaded
+    loaded=$("$PYTHON_BIN" - <<PY
+import json
+from pathlib import Path
+p = Path("$STATE_FILE")
+data = json.loads(p.read_text())
+print(data.get("cycle", 1))
+print(data.get("next_agent", "red"))
+print(data.get("red_latest", "$RED_LATEST"))
+print(data.get("blue_latest", "$BLUE_LATEST"))
+PY
+)
+    RESUME_CYCLE=$(echo "$loaded" | sed -n '1p')
+    RESUME_NEXT_AGENT=$(echo "$loaded" | sed -n '2p')
+    RED_LATEST=$(echo "$loaded" | sed -n '3p')
+    BLUE_LATEST=$(echo "$loaded" | sed -n '4p')
 }
 
 # 0. Install dependencies first (RunPod self-healing bootstrap)
@@ -297,6 +338,7 @@ if [ "$INSTALL_DEPS" == "1" ]; then
     install_dependencies
 fi
 preflight_runtime_checks
+load_state_if_requested
 
 # 1. Start the Environment Server
 echo "[1/4] Starting Target Environment Server on port $PORT_ENV..."
@@ -307,16 +349,23 @@ sleep 5 # Give FastAPI a moment to bind to the port
 if [ "$SEQUENTIAL_MODE" == "1" ]; then
     echo "[2/4] Running sequential alternating training..."
     mkdir -p "$CYCLE_ARCHIVE_DIR"
-    for ((cycle=1; cycle<=NUM_CYCLES; cycle++)); do
-        echo "----- Cycle $cycle / $NUM_CYCLES: Train RED then BLUE -----"
+    cycle=${RESUME_CYCLE:-1}
+    next_agent=${RESUME_NEXT_AGENT:-red}
+    while [ "$cycle" -le "$NUM_CYCLES" ]; do
+        echo "----- Cycle $cycle / $NUM_CYCLES | Next agent: $next_agent -----"
 
-        train_leg "red" "$RED_LATEST" "blue" "$BLUE_LATEST" "$cycle"
-        RED_LATEST="$OUTPUT_DIR/grpo_red/final_adapter"
-        RED_ARCHIVE="$CYCLE_ARCHIVE_DIR/red_cycle_${cycle}"
-        rm -rf "$RED_ARCHIVE"
-        cp -R "$RED_LATEST" "$RED_ARCHIVE"
-        echo "Saved RED checkpoint: $RED_LATEST"
-        echo "Archived RED cycle checkpoint: $RED_ARCHIVE"
+        if [ "$next_agent" = "red" ]; then
+            train_leg "red" "$RED_LATEST" "blue" "$BLUE_LATEST" "$cycle"
+            RED_LATEST="$OUTPUT_DIR/grpo_red/final_adapter"
+            RED_ARCHIVE="$CYCLE_ARCHIVE_DIR/red_cycle_${cycle}"
+            rm -rf "$RED_ARCHIVE"
+            cp -R "$RED_LATEST" "$RED_ARCHIVE"
+            echo "Saved RED checkpoint: $RED_LATEST"
+            echo "Archived RED cycle checkpoint: $RED_ARCHIVE"
+            next_agent="blue"
+            write_state "$cycle" "$next_agent" "$RED_LATEST" "$BLUE_LATEST"
+            continue
+        fi
 
         train_leg "blue" "$BLUE_LATEST" "red" "$RED_LATEST" "$cycle"
         BLUE_LATEST="$OUTPUT_DIR/grpo_blue/final_adapter"
@@ -325,7 +374,11 @@ if [ "$SEQUENTIAL_MODE" == "1" ]; then
         cp -R "$BLUE_LATEST" "$BLUE_ARCHIVE"
         echo "Saved BLUE checkpoint: $BLUE_LATEST"
         echo "Archived BLUE cycle checkpoint: $BLUE_ARCHIVE"
+        cycle=$((cycle + 1))
+        next_agent="red"
+        write_state "$cycle" "$next_agent" "$RED_LATEST" "$BLUE_LATEST"
     done
+    rm -f "$STATE_FILE"
 else
     echo "[2/4] Backward-compatible single-agent mode..."
     if [ "$AGENT_TO_TRAIN" == "red" ]; then

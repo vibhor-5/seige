@@ -5,5 +5,6 @@ __pycache__/
 *.pyc
 *.egg-info/
 outputs/
+outputs_grpo/
 .env
 sft_adapter/
