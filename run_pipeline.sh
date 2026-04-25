@@ -22,6 +22,7 @@ RESUME_PIPELINE=${RESUME_PIPELINE:-"1"}
 SEIGE_HF_PUSH=${SEIGE_HF_PUSH:-"0"}
 SEIGE_HF_REPO_ID=${SEIGE_HF_REPO_ID:-""}
 SEIGE_HF_PRIVATE=${SEIGE_HF_PRIVATE:-"0"}
+SEIGE_HF_RESTORE=${SEIGE_HF_RESTORE:-"1"}
 
 # Backward-compatible single-agent values.
 AGENT_TO_TRAIN=${AGENT_TO_TRAIN:-"red"}
@@ -47,6 +48,7 @@ echo "Torch Index URL: $TORCH_INDEX_URL"
 echo "SEIGE_FAST_INFERENCE: $SEIGE_FAST_INFERENCE"
 echo "TORCH_MIN_VERSION: $TORCH_MIN_VERSION (pinned stack: $TORCH_VERSION / torchvision $TORCHVISION_VERSION / torchaudio $TORCHAUDIO_VERSION)"
 echo "Resume Pipeline: $RESUME_PIPELINE"
+echo "Restore latest HF adapters on fresh start: $SEIGE_HF_RESTORE"
 if [ -n "$WANDB_API_KEY" ]; then
     echo "WandB Logging: ENABLED"
 else
@@ -396,12 +398,90 @@ PY
     BLUE_LATEST=$(echo "$loaded" | sed -n '4p')
 }
 
+restore_latest_hf_adapters_if_requested() {
+    if [ "$SEIGE_HF_RESTORE" != "1" ]; then
+        return
+    fi
+    if [ -f "$STATE_FILE" ]; then
+        echo "Local pipeline state exists; skipping HF adapter restore."
+        return
+    fi
+    if [ -z "$SEIGE_HF_REPO_ID" ]; then
+        echo "No SEIGE_HF_REPO_ID set; skipping HF adapter restore."
+        return
+    fi
+    echo "Checking Hugging Face for latest saved adapters in $SEIGE_HF_REPO_ID..."
+    local restored
+    restored=$(SEIGE_HF_REPO_ID="$SEIGE_HF_REPO_ID" OUTPUT_DIR="$OUTPUT_DIR" "$PYTHON_BIN" - <<'PY'
+import os
+import re
+from pathlib import Path
+
+repo_id = os.environ["SEIGE_HF_REPO_ID"]
+output_dir = Path(os.environ["OUTPUT_DIR"])
+restore_root = output_dir / "hf_restore"
+token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+
+try:
+    from huggingface_hub import HfApi, snapshot_download
+
+    api = HfApi(token=token)
+    files = api.list_repo_files(repo_id=repo_id, repo_type="model")
+    latest = {}
+    for path in files:
+        top = path.split("/", 1)[0]
+        match = re.fullmatch(r"(red|blue)_cycle_(\d+)", top)
+        if match:
+            agent, cycle = match.group(1), int(match.group(2))
+            if agent not in latest or cycle > latest[agent][0]:
+                latest[agent] = (cycle, top)
+
+    restore_root.mkdir(parents=True, exist_ok=True)
+    for agent in ("red", "blue"):
+        if agent not in latest:
+            print(f"{agent.upper()}=")
+            continue
+        _, prefix = latest[agent]
+        snapshot_download(
+            repo_id=repo_id,
+            repo_type="model",
+            allow_patterns=[f"{prefix}/*"],
+            local_dir=str(restore_root),
+            token=token,
+        )
+        print(f"{agent.upper()}={restore_root / prefix}")
+except Exception as exc:
+    print(f"WARN={exc!r}")
+    print("RED=")
+    print("BLUE=")
+PY
+)
+    local warn
+    warn=$(echo "$restored" | sed -n 's/^WARN=//p')
+    if [ -n "$warn" ]; then
+        echo "HF adapter restore warning: $warn"
+    fi
+    local red_restore
+    local blue_restore
+    red_restore=$(echo "$restored" | sed -n 's/^RED=//p' | tail -n 1)
+    blue_restore=$(echo "$restored" | sed -n 's/^BLUE=//p' | tail -n 1)
+    if [ -n "$red_restore" ] && [ -d "$red_restore" ]; then
+        RED_LATEST="$red_restore"
+        echo "Restored latest RED adapter from HF: $RED_LATEST"
+    fi
+    if [ -n "$blue_restore" ] && [ -d "$blue_restore" ]; then
+        BLUE_LATEST="$blue_restore"
+        echo "Restored latest BLUE adapter from HF: $BLUE_LATEST"
+    fi
+}
+
 # 0. Install dependencies first (RunPod self-healing bootstrap)
 if [ "$INSTALL_DEPS" == "1" ]; then
     install_dependencies
 fi
 preflight_runtime_checks
 load_state_if_requested
+restore_latest_hf_adapters_if_requested
 
 # 1. Start the Environment Server
 echo "[1/4] Starting Target Environment Server on port $PORT_ENV..."

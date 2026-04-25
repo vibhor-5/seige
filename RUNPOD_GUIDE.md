@@ -73,6 +73,7 @@ export SEIGE_HF_PUSH=1
 export SEIGE_HF_REPO_ID="YOUR_USERNAME/seige-grpo-checkpoints"   # pick a new, empty repo name
 export HF_TOKEN="hf_YourWriteToken"                               # or: export HUGGINGFACE_HUB_TOKEN=...
 # export SEIGE_HF_PRIVATE=1   # if you want the *new* repo to be private on first create
+# export SEIGE_HF_RESTORE=1   # default: on fresh pods, pull latest red_cycle_* / blue_cycle_* from this repo first
 
 # Run the master pipeline
 ./run_pipeline.sh
@@ -83,9 +84,10 @@ export HF_TOKEN="hf_YourWriteToken"                               # or: export H
 2. It alternates training in a loop: **train Red against frozen Blue, then train Blue against the newly trained Red**.
 3. After each leg, it saves the adapter and uses it as the next frozen opponent.
 4. It repeats this for `NUM_CYCLES` and outputs live metrics to Weights & Biases.
-5. Each leg writes both `final_adapter/` and `best_adapter/`; the pipeline archives/uploads `best_adapter/` when present (lowest logged train loss), not the last-step adapter.
-6. If `SEIGE_HF_PUSH=1`, it uploads the archived **cycle** adapter to your HF repo (e.g. `red_cycle_1/`, `blue_cycle_1/`, …) so a lost pod does not lose the best completed leg.
-7. Once complete, it automatically triggers `evaluate.py` using the latest Red and Blue adapters.
+5. On a fresh pod with no local `pipeline_state.json`, if `SEIGE_HF_REPO_ID` is set, the script restores the newest `red_cycle_*` and `blue_cycle_*` adapters from Hugging Face before training.
+6. Each leg writes both `final_adapter/` and `best_adapter/`; the pipeline archives/uploads `best_adapter/` when present (lowest logged train loss), not the last-step adapter.
+7. If `SEIGE_HF_PUSH=1`, it uploads the archived **cycle** adapter to your HF repo (e.g. `red_cycle_1/`, `blue_cycle_1/`, …) so a lost pod does not lose the best completed leg.
+8. Once complete, it automatically triggers `evaluate.py` using the latest Red and Blue adapters.
 
 ## Step 6: Save your new agent (Hugging Face)
 When the script prints **"Pipeline finished successfully!"**, adapters are under `outputs_grpo/`. If you set `SEIGE_HF_PUSH=1` (Step 5), the **best adapter for each completed leg** is already in your HF model repo in subfolders such as `red_cycle_1/`, `blue_cycle_1/`, etc. You can add a manual top-level upload of `best_adapter` the same way if you want a separate “latest-best”-only repo; otherwise the pipeline upload is enough for crash safety between legs.
