@@ -269,7 +269,10 @@ class TransformerLensTargetSystem(MockTargetSystem):
 
         self.torch = torch
         self.device = _select_device(torch)
-        dtype_name = os.getenv("SEIGE_TL_DTYPE", "bfloat16" if self.device == "cuda" else "float32")
+        # Qwen through TransformerLens can produce mixed Float/BFloat16 attention
+        # tensors during generation. Keep the default stable; users can opt into
+        # lower precision with SEIGE_TL_DTYPE once validated for their model.
+        dtype_name = os.getenv("SEIGE_TL_DTYPE", "float32")
         dtype = getattr(torch, dtype_name)
         self.model = HookedTransformer.from_pretrained(
             model_id,

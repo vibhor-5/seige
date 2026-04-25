@@ -66,6 +66,7 @@ export SEIGE_SAVE_STEPS=50
 export INIT_ADAPTER_PATH="sft_adapter"
 export SEIGE_TARGET_BACKEND=transformerlens # small white-box target with named hook points
 export SEIGE_TARGET_MODEL_ID="Qwen/Qwen2.5-0.5B-Instruct"
+export SEIGE_TL_DTYPE=float32              # stable TransformerLens generation for Qwen; try bfloat16 only after validation
 export SEIGE_AGENT_MODEL_ID="unsloth/Qwen2.5-0.5B-Instruct-bnb-4bit"
 export SEIGE_TRAIN_WHITEBOX_TOOLS=1        # first run: train probes/vectors/patch baselines
 export SEIGE_WHITEBOX_TOOLS_DIR="data/whitebox_tools"
