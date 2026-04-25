@@ -43,10 +43,14 @@ To ensure your training doesn't get killed if you accidentally close your browse
 tmux new -s training
 ```
 
-Now, set your Weights & Biases API key so you can monitor the training live on your dashboard, set the agent you want to train (Red or Blue), and execute the master pipeline:
+Now, set your Weights & Biases API key and run the sequential alternating loop (Red then Blue per cycle):
 ```bash
 export WANDB_API_KEY="your_wandb_api_key_here"
-export AGENT_TO_TRAIN="red"
+export SEQUENTIAL_MODE=1
+export NUM_CYCLES=3
+export GRPO_MAX_STEPS=200
+export NUM_EPISODES=100
+export INIT_ADAPTER_PATH="sft_adapter"
 
 # Run the master pipeline
 ./run_pipeline.sh
@@ -54,10 +58,10 @@ export AGENT_TO_TRAIN="red"
 
 **What is happening?**
 1. The script will boot the `seige` environment server on port `8000`.
-2. It will boot the `opponent_server.py` on port `8001` (loading the SFT adapter as the frozen target).
-3. It will wait for the models to load into the 48GB VRAM.
-4. It will run `run_grpo.py` and output live metrics to Weights & Biases.
-5. Once complete, it automatically triggers `evaluate.py` to test the new Red agent against the frozen Blue agent.
+2. It alternates training in a loop: **train Red against frozen Blue, then train Blue against the newly trained Red**.
+3. After each leg, it saves the adapter and uses it as the next frozen opponent.
+4. It repeats this for `NUM_CYCLES` and outputs live metrics to Weights & Biases.
+5. Once complete, it automatically triggers `evaluate.py` using the latest Red and Blue adapters.
 
 ## Step 6: Save Your New Agent!
 When the script prints **"Pipeline finished successfully!"**, your brand new agent adapter has been saved to `outputs_grpo/grpo_red/final_adapter`.
@@ -75,11 +79,13 @@ print('Upload complete!')
 "
 ```
 
-## Step 7: Train the Next Generation (Optional)
-To immediately start Generation 2 and train Blue to defeat your newly trained Red agent, simply swap the variables and run it again:
+## Step 7: Single-Agent Backward-Compatible Mode (Optional)
+If you still want one-off training for only one side, disable sequential mode:
 ```bash
+export SEQUENTIAL_MODE=0
 export AGENT_TO_TRAIN="blue"
 export FROZEN_ADAPTER_PATH="outputs_grpo/grpo_red/final_adapter"
+export SFT_ADAPTER_PATH="sft_adapter"
 
 ./run_pipeline.sh
 ```

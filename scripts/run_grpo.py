@@ -20,14 +20,30 @@ RED_SYSTEM = "You are Red in seige, an adversarial AI safety simulation.\nGoal: 
 BLUE_SYSTEM = "You are Blue in seige, an adversarial AI safety simulation.\nGoal: detect, block, patch, and explain Red attacks.\nReturn ONLY valid JSON with:\nagent_type=\"blue\", action_type, session_id, optional layer, optional explanation."
 
 def parse_args():
-    parser = argparse.add_argument_group("GRPO Training Arguments")
+    parser = argparse.ArgumentParser(description="GRPO training for a single Seige agent.")
     parser.add_argument("--agent_type", type=str, required=True, choices=["red", "blue"], help="Which agent to train (red or blue)")
     parser.add_argument("--base_model", type=str, default="unsloth/Qwen2.5-3B-Instruct-bnb-4bit", help="Base model for Unsloth")
-    parser.add_argument("--sft_adapter", type=str, default="../sft_adapter", help="Path to the shared trained SFT adapter")
+    parser.add_argument(
+        "--init_adapter",
+        type=str,
+        default="sft_adapter",
+        help="Path to adapter used to initialize the trainee model (SFT or previous generation).",
+    )
+    parser.add_argument(
+        "--sft_adapter",
+        type=str,
+        default=None,
+        help="Backward-compatible alias for --init_adapter.",
+    )
     parser.add_argument("--env_url", type=str, default="http://localhost:8000", help="URL for the Seige target environment")
     parser.add_argument("--output_dir", type=str, default="outputs_grpo", help="Base output directory for checkpoints")
     parser.add_argument("--num_episodes", type=int, default=100, help="Number of proxy prompts to generate for training")
-    return argparse.ArgumentParser(parents=[parser]).parse_args()
+    parser.add_argument("--max_steps", type=int, default=200, help="GRPO optimization steps for this training leg")
+    parser.add_argument("--run_name", type=str, default=None, help="Optional explicit W&B run name")
+    args = parser.parse_args()
+    if args.sft_adapter:
+        args.init_adapter = args.sft_adapter
+    return args
 
 def main():
     args = parse_args()
@@ -37,7 +53,7 @@ def main():
     print("Loading Seige Client...")
     env_client = SeigeClient(base_url=args.env_url)
     
-    print(f"Loading Base Model ({args.base_model}) & SFT Adapter ({args.sft_adapter})...")
+    print(f"Loading Base Model ({args.base_model}) & Init Adapter ({args.init_adapter})...")
     max_seq_length = 2048
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=args.base_model,
@@ -57,12 +73,12 @@ def main():
         use_gradient_checkpointing="unsloth", 
     )
     
-    # Load the specific SFT weights on top of our PEFT model
-    if os.path.exists(args.sft_adapter):
-        print(f"Applying SFT adapter from {args.sft_adapter}")
-        model.load_adapter(args.sft_adapter)
+    # Load initialization weights on top of our PEFT model.
+    if os.path.exists(args.init_adapter):
+        print(f"Applying init adapter from {args.init_adapter}")
+        model.load_adapter(args.init_adapter)
     else:
-        print(f"WARNING: SFT adapter '{args.sft_adapter}' not found. Training from base model.")
+        print(f"WARNING: Init adapter '{args.init_adapter}' not found. Training from base model.")
 
     # REWARD FUNCTIONS
     def format_reward_func(prompts: List[str], completions: List[str], **kwargs) -> List[float]:
@@ -154,9 +170,9 @@ def main():
         max_prompt_length=512,
         max_completion_length=512,
         num_generations=4,
-        max_steps=200,
+        max_steps=args.max_steps,
         report_to="wandb" if os.environ.get("WANDB_API_KEY") else "none",
-        run_name=f"seige-grpo-{args.agent_type}",
+        run_name=args.run_name or f"seige-grpo-{args.agent_type}",
     )
 
     trainer = GRPOTrainer(
