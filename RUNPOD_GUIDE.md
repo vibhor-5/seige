@@ -64,6 +64,9 @@ export INIT_ADAPTER_PATH="sft_adapter"
 # Increase num generations if VRAM allows; keep tiebreak small so it only prevents dead advantages.
 # export SEIGE_GRPO_NUM_GENERATIONS=6
 # export SEIGE_GRPO_TEMPERATURE=0.82
+# export SEIGE_GRPO_MAX_COMPLETION_LENGTH=192
+# export SEIGE_OPPONENT_MAX_NEW_TOKENS=96
+# export SEIGE_REWARD_RED_OPPONENT_CHECK=0   # default: skip expensive frozen-blue check during RED reward
 # export SEIGE_REWARD_W_RARITY=0.14
 # export SEIGE_REWARD_TIEBREAK=0.028
 # export SEIGE_SAMPLE_EVERY_STEPS=10   # print prompt + model output every N trainer steps

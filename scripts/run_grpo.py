@@ -108,6 +108,12 @@ def _max_seq_length() -> int:
     return int(os.getenv("SEIGE_AGENT_MAX_SEQ_LENGTH", "2048"))
 
 
+def _reward_red_opponent_check_enabled() -> bool:
+    # Expensive: this is an auxiliary detection check, not red's primary reward.
+    # Keep it off by default because it adds one frozen-blue generation per rollout.
+    return os.getenv("SEIGE_REWARD_RED_OPPONENT_CHECK", "0") == "1"
+
+
 class LocalSeigeClient:
     """In-process env adapter for reward rollouts; avoids HTTP JSON parsing failures during GRPO."""
 
@@ -584,14 +590,20 @@ def main():
 
         hlist = [hashlib.sha256(_completion_to_text(c).encode("utf-8", errors="ignore")).hexdigest() for c in completions]
         r_div = _rarity_diversity_bonuses(hlist, rw["rarity"])
+        shared_blue_red_action: dict | None = None
+        if args.agent_type == "blue":
+            # Use the same frozen-red setup action across this group. This preserves
+            # relative comparison between blue completions and avoids N opponent generations.
+            setup_obs = env_client.reset()
+            shared_blue_red_action = _request_opponent_action(_agent_observation(setup_obs, "red"))
 
         def score_action(action: dict) -> tuple[float, dict]:
             reset_obs = env_client.reset()
             if args.agent_type == "blue":
                 # Blue must be scored as a response to an actual red attack; otherwise all
                 # blue completions inspect a clean state and collapse to identical rewards.
-                red_obs = _agent_observation(reset_obs, "red")
-                red_setup = env_client.step(_request_opponent_action(red_obs))
+                red_action = shared_blue_red_action or _request_opponent_action(_agent_observation(reset_obs, "red"))
+                red_setup = env_client.step(red_action)
                 if red_setup.get("done", False):
                     # Frozen red already won; give blue a shaped failure signal instead
                     # of accidentally treating red's positive reward as blue's reward.
@@ -601,6 +613,8 @@ def main():
                 return float(blue_result.get("reward", 0.0)), blue_result.get("info", {})
 
             red_result = env_client.step(action)
+            if not _reward_red_opponent_check_enabled():
+                return float(red_result.get("reward", 0.0)), red_result.get("info", {})
             # Keep red's own reward. Run one frozen-blue response only to expose detection
             # side effects as a small bonus/penalty, not as the primary reward.
             if not red_result.get("done", False):
@@ -733,8 +747,8 @@ def main():
         save_steps=50,
         per_device_train_batch_size=4,
         gradient_accumulation_steps=4,
-        max_prompt_length=512,
-        max_completion_length=512,
+        max_prompt_length=int(os.getenv("SEIGE_GRPO_MAX_PROMPT_LENGTH", "512")),
+        max_completion_length=int(os.getenv("SEIGE_GRPO_MAX_COMPLETION_LENGTH", "192")),
         num_generations=int(os.getenv("SEIGE_GRPO_NUM_GENERATIONS", "4")),
         max_steps=args.max_steps,
         # Higher-temperature rollouts = more within-group spread (GRPO++ / open recipes).
