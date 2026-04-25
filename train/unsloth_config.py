@@ -1,6 +1,15 @@
 from __future__ import annotations
 
 import os
+import torch
+
+def _patch_torch_inductor_for_unsloth() -> None:
+    # Some Torch builds (common on RunPod images) do not expose torch._inductor.config.
+    # Unsloth expects it during import and crashes otherwise.
+    if hasattr(torch, "_inductor") and not hasattr(torch._inductor, "config"):
+        class _CompatInductorConfig:  # pragma: no cover - import-time compatibility shim
+            pass
+        torch._inductor.config = _CompatInductorConfig
 
 
 AGENT_MODEL_ID = os.getenv("SEIGE_AGENT_MODEL_ID", "google/gemma-4-E4B")
@@ -39,6 +48,7 @@ def grpo_config(output_dir: str, run_name: str):
 
 
 def load_agent_model():
+    _patch_torch_inductor_for_unsloth()
     from unsloth import FastLanguageModel
 
     model, tokenizer = FastLanguageModel.from_pretrained(

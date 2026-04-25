@@ -1,6 +1,17 @@
 import os
 import json
 import argparse
+import torch
+
+def _patch_torch_inductor_for_unsloth() -> None:
+    # Some Torch builds (common on RunPod images) do not expose torch._inductor.config.
+    # Unsloth expects it during import and crashes otherwise.
+    if hasattr(torch, "_inductor") and not hasattr(torch._inductor, "config"):
+        class _CompatInductorConfig:  # pragma: no cover - import-time compatibility shim
+            pass
+        torch._inductor.config = _CompatInductorConfig
+
+_patch_torch_inductor_for_unsloth()
 
 from unsloth import FastLanguageModel
 import sys
