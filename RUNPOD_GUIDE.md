@@ -54,6 +54,13 @@ export GRPO_MAX_STEPS=200
 export NUM_EPISODES=100
 export INIT_ADAPTER_PATH="sft_adapter"
 
+# Optional reward / exploration knobs. Defaults are tuned to avoid GRPO zero-std collapse.
+# Increase num generations if VRAM allows; keep tiebreak small so it only prevents dead advantages.
+# export SEIGE_GRPO_NUM_GENERATIONS=6
+# export SEIGE_GRPO_TEMPERATURE=0.82
+# export SEIGE_REWARD_W_RARITY=0.14
+# export SEIGE_REWARD_TIEBREAK=0.028
+
 # Optional: auto-upload after each leg (e.g. red_cycle_1/, blue_cycle_1/, ... under the repo)
 export SEIGE_HF_PUSH=1
 export SEIGE_HF_REPO_ID="YOUR_USERNAME/seige-grpo-checkpoints"   # pick a new, empty repo name

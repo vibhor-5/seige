@@ -124,40 +124,161 @@ def _strip_code_fence(text: str) -> str:
         content = content[:-3]
     return content.strip()
 
-def _parse_action_and_format_score(completion, agent_type: str) -> tuple[dict | None, float]:
-    content = completion[0]["content"] if isinstance(completion, list) else completion
-    content = _strip_code_fence(content)
+def _completion_to_text(completion) -> str:
+    if isinstance(completion, list) and completion and isinstance(completion[0], dict) and "content" in completion[0]:
+        return str(completion[0]["content"])
+    return str(completion)
+
+
+def _parse_action_and_format_gate(completion, agent_type: str) -> tuple[dict | None, float, str]:
+    """
+    Return (action_dict, format_gate, reason).
+    format_gate is 0.0 for structurally valid JSON for the task (outcome focus), otherwise negative
+    (invalid / wrong role / missing required keys). We intentionally avoid *positive* continuous "format"
+    scores: they are learned to max quickly and drive reward_std -> 0 under GRPO (hacking the shaping).
+    """
+    content = _strip_code_fence(_completion_to_text(completion))
     try:
         data = json.loads(content)
     except json.JSONDecodeError:
-        return None, -1.0
+        return None, -1.0, "json_decode"
 
     if not isinstance(data, dict):
-        return None, -0.5
+        return None, -0.9, "not_object"
 
-    score = 0.0
-    if data.get("agent_type") == agent_type:
-        score += 0.4
-    else:
-        score -= 0.6
+    if data.get("agent_type") != agent_type:
+        return data, -0.65, "wrong_agent_type"
 
     if agent_type == "red":
-        if data.get("strategy"):
-            score += 0.2
-        if data.get("sub_strategy"):
-            score += 0.1
-        payload = str(data.get("payload", "")).strip()
-        # Encourage richer actions so model does not converge to trivial templates.
-        score += min(0.3, len(payload) / 120.0)
+        if not data.get("strategy"):
+            return data, -0.35, "red_missing_strategy"
+        if not str(data.get("payload", "")).strip():
+            return data, -0.25, "red_empty_payload"
     else:
-        if data.get("action_type"):
-            score += 0.2
-        if data.get("session_id"):
-            score += 0.2
-        if data.get("explanation"):
-            score += 0.2
+        if not data.get("action_type"):
+            return data, -0.35, "blue_missing_action_type"
+        if not str(data.get("session_id", "")).strip():
+            return data, -0.3, "blue_missing_session_id"
 
-    return data, score
+    return data, 0.0, "ok"
+
+
+def _env_reward_shaped(env_raw: float) -> float:
+    """
+    Map unbounded env return to a bounded range without crushing variance like tanh(reward/6) does
+    when most rollouts sit in a narrow band.
+    Modes: soft_clip (default) | tanh
+    """
+    mode = os.getenv("SEIGE_ENV_REWARD_SHAPING", "soft_clip").lower().strip()
+    if mode == "tanh":
+        d = float(os.getenv("SEIGE_ENV_TANH_DIV", "12.0"))
+        return float(math.tanh(float(env_raw) / max(1e-6, d)))
+    clip = float(os.getenv("SEIGE_ENV_SOFT_CLIP_DIV", "18.0"))
+    x = float(env_raw) / max(1e-6, clip)
+    if x < -1.0:
+        return -1.0
+    if x > 1.0:
+        return 1.0
+    return float(x)
+
+
+def _rarity_diversity_bonuses(hashes: list[str], weight: float) -> list[float]:
+    """
+    Penalize duplicate completions in the same generation group; rewards routes that are unique
+    in the set (RLOO/GRPO-style: push *relative* credit without a fixed additive format plateau).
+    Mean-zero: encourages spread when the env reward is near-constant.
+    """
+    n = len(hashes)
+    if n <= 1 or weight <= 0:
+        return [0.0] * n
+    from collections import Counter
+
+    cnt = Counter(hashes)
+    inv = [1.0 / cnt[h] for h in hashes]
+    m = sum(inv) / n
+    return [weight * (i - m) for i in inv]
+
+
+def _tiebreak_if_flat(hashes: list[str], values: list[float], scale: float) -> list[float]:
+    if scale <= 0.0 or len(values) < 2:
+        return [0.0] * len(values)
+    m = sum(values) / len(values)
+    s = 0.0
+    for v in values:
+        s += (v - m) ** 2
+    s = (s / len(values)) ** 0.5
+    if s > 1e-4:
+        return [0.0] * len(values)
+    raw = []
+    for h in hashes:
+        # Stable, tiny content-tied tiebreaker. Invalid-format penalties still dominate,
+        # so the model cannot cheaply win with arbitrary hash fishing.
+        bucket = int(h[:8], 16) / 0xFFFFFFFF
+        raw.append((bucket - 0.5) * scale)
+    mean_raw = sum(raw) / len(raw)
+    return [v - mean_raw for v in raw]
+
+
+def _dense_outcome_bonus(info: dict, agent_type: str) -> float:
+    if not isinstance(info, dict) or not info:
+        return 0.0
+    b = 0.0
+    if agent_type == "red":
+        b += 0.14 * float(bool(info.get("extraction_succeeded", False)))
+        b += 0.10 * float(bool(info.get("policy_bypassed", False)))
+        b += 0.08 * float(bool(info.get("success", False) and not info.get("detected", False)))
+        b -= 0.10 * float(bool(info.get("detected", False)))
+    else:
+        b += 0.16 * float(bool(info.get("true_positive", False)))
+        b -= 0.14 * float(bool(info.get("false_positive", False)))
+        b -= 0.08 * float(bool(info.get("false_negative", False)))
+        b -= 0.04 * float(info.get("missed_attack_count", 0) or 0)
+        b += 0.08 * min(1.0, float(info.get("explanation_quality", 0.0) or 0.0))
+    return float(b)
+
+
+def _agent_observation(obs: dict, agent_type: str) -> dict:
+    if not isinstance(obs, dict):
+        return {}
+    nested = obs.get(agent_type)
+    if isinstance(nested, dict):
+        return nested
+    inner = obs.get("observation")
+    if isinstance(inner, dict):
+        nested = inner.get(agent_type)
+        if isinstance(nested, dict):
+            return nested
+    return obs
+
+
+def _request_opponent_action(obs: dict) -> dict:
+    import requests
+
+    try:
+        timeout = float(os.getenv("SEIGE_OPPONENT_TIMEOUT", "10"))
+        opp = requests.post("http://localhost:8001/act", json={"obs": obs}, timeout=timeout).json()
+        return opp.get("action", {})
+    except Exception as ex:
+        print(f"Opponent API failed: {ex}. Pass.")
+        return {"agent_type": "unknown", "action_type": "pass"}
+
+
+def _sample_prompt_observations(env_client: SeigeClient, agent_type: str, count: int) -> list[dict]:
+    max_samples = max(1, int(os.getenv("SEIGE_PROMPT_OBS_SAMPLES", "16")))
+    samples: list[dict] = []
+    for _ in range(min(count, max_samples)):
+        try:
+            reset_obs = env_client.reset()
+            if agent_type == "blue":
+                red_obs = _agent_observation(reset_obs, "red")
+                red_setup = env_client.step(_request_opponent_action(red_obs))
+                samples.append(_agent_observation(red_setup.get("observation", {}), "blue"))
+            else:
+                samples.append(_agent_observation(reset_obs, "red"))
+        except Exception as ex:
+            print(f"Prompt observation sampling failed: {ex}")
+            samples.append({})
+    return samples or [{}]
 
 def _action_fingerprint(action: dict) -> str:
     payload = json.dumps(action, sort_keys=True, separators=(",", ":"))
@@ -165,10 +286,12 @@ def _action_fingerprint(action: dict) -> str:
 
 def _reward_weights() -> dict[str, float]:
     return {
-        "format": float(os.getenv("SEIGE_REWARD_W_FORMAT", "0.25")),
+        "invalid": float(os.getenv("SEIGE_REWARD_W_INVALID", "1.0")),
         "env": float(os.getenv("SEIGE_REWARD_W_ENV", "1.0")),
-        "bonus": float(os.getenv("SEIGE_REWARD_W_BONUS", "1.0")),
+        "bonus": float(os.getenv("SEIGE_REWARD_W_BONUS", "0.55")),
         "repeat_penalty": float(os.getenv("SEIGE_REWARD_W_REPEAT_PENALTY", "0.12")),
+        "rarity": float(os.getenv("SEIGE_REWARD_W_RARITY", "0.14")),
+        "tiebreak": float(os.getenv("SEIGE_REWARD_TIEBREAK", "0.028")),
     }
 
 def _suppress_noisy_train_warnings() -> None:
@@ -226,15 +349,14 @@ def _latest_checkpoint_dir(output_dir: str) -> str | None:
     candidates.sort(key=lambda x: x[0])
     return candidates[-1][1]
 
-def _scheduled_format_weight(base_weight: float, reward_call_idx: int) -> float:
-    # Decay format shaping so env outcomes dominate later.
-    warmup_calls = int(os.getenv("SEIGE_REWARD_FORMAT_WARMUP_CALLS", "200"))
-    min_scale = float(os.getenv("SEIGE_REWARD_FORMAT_MIN_SCALE", "0.35"))
-    if warmup_calls <= 0:
-        return base_weight * min_scale
-    progress = min(1.0, reward_call_idx / warmup_calls)
-    scale = 1.0 - (1.0 - min_scale) * progress
-    return base_weight * scale
+def _invalid_penalty_ramp(reward_call_idx: int) -> float:
+    """Slightly softer invalid-JSON penalty at the very start; outcome signal dominates after ramp."""
+    ramp = int(os.getenv("SEIGE_INVALID_PENALTY_RAMP_STEPS", "0"))
+    if ramp <= 0:
+        return 1.0
+    p = min(1.0, reward_call_idx / ramp)
+    lo = float(os.getenv("SEIGE_INVALID_PENALTY_RAMP_START", "0.62"))
+    return lo + (1.0 - lo) * p
 
 def main():
     args = parse_args()
@@ -279,101 +401,125 @@ def main():
     reward_call_idx = {"value": 0}
     reward_weights = _reward_weights()
 
-    # Single combined reward to avoid flat reward plateaus.
+    # See comment block: outcome-dominant, no "format plateau"; rarity + (optional) flat-env tiebreak for σ>0
     def combined_reward_func(prompts: List[str], completions: List[str], **kwargs) -> List[float]:
-        import requests
+        from statistics import pstdev
+
+        rw = reward_weights
         reward_call_idx["value"] += 1
-        current_format_weight = _scheduled_format_weight(reward_weights["format"], reward_call_idx["value"])
-        rewards = []
-        component_format: list[float] = []
-        component_env: list[float] = []
-        component_bonus: list[float] = []
-        component_repeat_penalty: list[float] = []
-        for completion in completions:
-            action_data, format_score = _parse_action_and_format_score(completion, args.agent_type)
+        ramp = _invalid_penalty_ramp(reward_call_idx["value"])
+
+        hlist = [hashlib.sha256(_completion_to_text(c).encode("utf-8", errors="ignore")).hexdigest() for c in completions]
+        r_div = _rarity_diversity_bonuses(hlist, rw["rarity"])
+
+        def score_action(action: dict) -> tuple[float, dict]:
+            reset_obs = env_client.reset()
+            if args.agent_type == "blue":
+                # Blue must be scored as a response to an actual red attack; otherwise all
+                # blue completions inspect a clean state and collapse to identical rewards.
+                red_obs = _agent_observation(reset_obs, "red")
+                red_setup = env_client.step(_request_opponent_action(red_obs))
+                if red_setup.get("done", False):
+                    # Frozen red already won; give blue a shaped failure signal instead
+                    # of accidentally treating red's positive reward as blue's reward.
+                    info = red_setup.get("info", {}) if isinstance(red_setup, dict) else {}
+                    return -abs(float(red_setup.get("reward", 0.0))), info
+                blue_result = env_client.step(action)
+                return float(blue_result.get("reward", 0.0)), blue_result.get("info", {})
+
+            red_result = env_client.step(action)
+            # Keep red's own reward. Run one frozen-blue response only to expose detection
+            # side effects as a small bonus/penalty, not as the primary reward.
+            if not red_result.get("done", False):
+                blue_obs = _agent_observation(red_result.get("observation", {}), "blue")
+                try:
+                    response = env_client.step(_request_opponent_action(blue_obs))
+                    info = dict(red_result.get("info", {}) or {})
+                    opp_info = response.get("info", {}) if isinstance(response, dict) else {}
+                    if isinstance(opp_info, dict) and opp_info.get("true_positive"):
+                        info["detected"] = True
+                    return float(red_result.get("reward", 0.0)), info
+                except Exception:
+                    pass
+            return float(red_result.get("reward", 0.0)), red_result.get("info", {})
+
+        pre_tie: list[float] = []
+        pre_env: list[float] = []
+        c_invalid: list[float] = []
+        c_env: list[float] = []
+        c_bon: list[float] = []
+        c_rep: list[float] = []
+        c_rar: list[float] = []
+        n_bad_json = 0
+
+        for j, completion in enumerate(completions):
+            act, gate, why = _parse_action_and_format_gate(completion, args.agent_type)
+            if why in ("json_decode", "not_object"):
+                n_bad_json += 1
+            inv = rw["invalid"] * ramp * (gate if gate < 0.0 else 0.0)
+
+            if act is None or gate < 0.0:
+                rep = 0.0
+                t = inv + 0.0 * rw["env"] + 0.0 * rw["bonus"] + rep + r_div[j]
+                pre_tie.append(t)
+                pre_env.append(0.0)
+                c_invalid.append(inv)
+                c_env.append(0.0)
+                c_bon.append(0.0)
+                c_rep.append(rep)
+                c_rar.append(r_div[j])
+                continue
+
             try:
-                if action_data is None:
-                    rewards.append(format_score)
-                    component_format.append(format_score)
-                    component_env.append(0.0)
-                    component_bonus.append(0.0)
-                    component_repeat_penalty.append(0.0)
-                    continue
+                raw, info = score_action(act)
+                e_st = _env_reward_shaped(raw)
+                d_bonus = _dense_outcome_bonus(info, args.agent_type) if isinstance(info, dict) else 0.0
+                if isinstance(info, dict) and info.get("error"):
+                    d_bonus -= 0.45
 
-                # Start a fresh clash in the environment
-                obs = env_client.reset()
-                
-                # 1. Submit the Trainee's action
-                result = env_client.step(action_data)
-                
-                # 2. Resolve the clash if the opponent needs to act
-                done = result.get("done", False)
-                max_clash_steps = 5
-                step_count = 0
-                
-                while not done and step_count < max_clash_steps:
-                    opponent_obs = result.get("observation", {})
-                    # Query the Frozen Opponent API on port 8001
-                    try:
-                        opp_res = requests.post("http://localhost:8001/act", json={"obs": opponent_obs}, timeout=10).json()
-                        opp_action = opp_res.get("action", {})
-                    except Exception as e:
-                        print(f"Opponent API failed: {e}. Passing empty action.")
-                        opp_action = {"agent_type": "unknown", "action_type": "pass"}
-                        
-                    result = env_client.step(opp_action)
-                    done = result.get("done", False)
-                    step_count += 1
-                
-                env_reward_raw = float(result.get("reward", 0.0))
-                # Normalize wide reward ranges to stable GRPO signal.
-                env_reward = math.tanh(env_reward_raw / 6.0)
-                info = result.get("info", {}) if isinstance(result, dict) else {}
-                bonus = 0.0
-                if isinstance(info, dict):
-                    if info.get("error"):
-                        bonus -= 0.7
-                    bonus += 0.15 * float(info.get("reward/extraction", 0.0) > 0)
-                    bonus += 0.10 * float(info.get("reward/policy_bypass", 0.0) > 0)
-                    bonus -= 0.10 * float(info.get("reward/detected_penalty", 0.0) < 0)
+                fp = _action_fingerprint(act)
+                k = recent_action_counts[fp]
+                recent_action_counts[fp] = k + 1
+                rep = -rw["repeat_penalty"] * min(6.0, float(k))
 
-                fingerprint = _action_fingerprint(action_data)
-                seen_count = recent_action_counts[fingerprint]
-                recent_action_counts[fingerprint] += 1
-                repetition_penalty = -reward_weights["repeat_penalty"] * min(6.0, float(seen_count))
+                t = inv + rw["env"] * e_st + rw["bonus"] * d_bonus + rep + r_div[j]
+                pre_tie.append(t)
+                pre_env.append(e_st)
+                c_invalid.append(inv)
+                c_env.append(rw["env"] * e_st)
+                c_bon.append(rw["bonus"] * d_bonus)
+                c_rep.append(rep)
+                c_rar.append(r_div[j])
+            except Exception as ex:  # noqa: BLE001
+                print(f"Env reward step failed: {ex}")
+                t = inv + 0.0 * rw["env"] + 0.0 * rw["bonus"] + (-rw["repeat_penalty"]) + r_div[j]
+                pre_tie.append(t)
+                pre_env.append(0.0)
+                c_invalid.append(inv)
+                c_env.append(0.0)
+                c_bon.append(0.0)
+                c_rep.append(-rw["repeat_penalty"])
+                c_rar.append(r_div[j])
 
-                # Format is a light regularizer; env behavior dominates.
-                combined = (
-                    (current_format_weight * format_score)
-                    + (reward_weights["env"] * env_reward)
-                    + (reward_weights["bonus"] * bonus)
-                    + repetition_penalty
-                )
-                rewards.append(float(combined))
-                component_format.append(current_format_weight * format_score)
-                component_env.append(reward_weights["env"] * env_reward)
-                component_bonus.append(reward_weights["bonus"] * bonus)
-                component_repeat_penalty.append(repetition_penalty)
-            except Exception as e:
-                fallback = float((current_format_weight * format_score) - 0.8)
-                rewards.append(fallback)
-                component_format.append(current_format_weight * format_score)
-                component_env.append(0.0)
-                component_bonus.append(-0.8)
-                component_repeat_penalty.append(0.0)
+        tbon = _tiebreak_if_flat(hlist, pre_env, rw["tiebreak"])
+        rewards = [pre_tie[i] + tbon[i] for i in range(len(pre_tie))]
 
-        # Log component breakdown so reward hacking is visible in metrics.
         try:
             import wandb
             if wandb.run and rewards:
+                pstd = float(pstdev([float(x) for x in rewards])) if len(rewards) > 1 else 0.0
+                pstd_e = float(pstdev([float(x) for x in pre_env])) if len(pre_env) > 1 else 0.0
                 wandb.log(
                     {
-                        "train/reward_components/format_mean": sum(component_format) / len(component_format),
-                        "train/reward_components/env_mean": sum(component_env) / len(component_env),
-                        "train/reward_components/bonus_mean": sum(component_bonus) / len(component_bonus),
-                        "train/reward_components/repeat_penalty_mean": sum(component_repeat_penalty) / len(component_repeat_penalty),
+                        "train/reward_pre/intra_group_std": pstd,
+                        "train/reward_pre/intra_group_std_env_shaped": pstd_e,
+                        "train/reward_components/invalid_mean": sum(c_invalid) / len(c_invalid),
+                        "train/reward_components/env_mean": sum(c_env) / len(c_env),
+                        "train/reward_components/bonus_mean": sum(c_bon) / len(c_bon),
+                        "train/reward_components/repeat_penalty_mean": sum(c_rep) / len(c_rep),
+                        "train/reward_components/rarity_mean": sum(c_rar) / len(c_rar),
                         "train/reward_components/combined_mean": sum(rewards) / len(rewards),
-                        "train/reward_components/format_weight_current": current_format_weight,
+                        "train/reward_metrics/frac_bad_json": n_bad_json / max(1, len(completions)),
                     }
                 )
         except Exception:
@@ -382,11 +528,13 @@ def main():
 
     print(f"Building Synthetic Prompts Dataset for {args.agent_type.upper()}...")
     system_prompt = RED_SYSTEM if args.agent_type == "red" else BLUE_SYSTEM
+    prompt_obs = _sample_prompt_observations(env_client, args.agent_type, args.num_episodes)
     prompts = []
-    for _ in range(args.num_episodes):
+    for idx in range(args.num_episodes):
+        obs = prompt_obs[idx % len(prompt_obs)]
         prompts.append([
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": "Current Observation:\n{}\n\nOutput your JSON action:\n"}
+            {"role": "user", "content": f"Current Observation:\n{json.dumps(obs, sort_keys=True)}\n\nOutput your JSON action:\n"}
         ])
     
     train_dataset = Dataset.from_dict({"prompt": prompts})
@@ -396,7 +544,7 @@ def main():
     # Configure GRPO
     training_args = GRPOConfig(
         output_dir=agent_output_dir,
-        learning_rate=2e-5,
+        learning_rate=float(os.getenv("SEIGE_GRPO_LR", "2e-5")),
         logging_steps=5,
         eval_steps=20,
         save_steps=50,
@@ -404,8 +552,11 @@ def main():
         gradient_accumulation_steps=4,
         max_prompt_length=512,
         max_completion_length=512,
-        num_generations=4,
+        num_generations=int(os.getenv("SEIGE_GRPO_NUM_GENERATIONS", "4")),
         max_steps=args.max_steps,
+        # Higher-temperature rollouts = more within-group spread (GRPO++ / open recipes).
+        temperature=float(os.getenv("SEIGE_GRPO_TEMPERATURE", "0.82")),
+        beta=float(os.getenv("SEIGE_GRPO_BETA", "0.04")),
         report_to="wandb" if os.environ.get("WANDB_API_KEY") else "none",
         run_name=args.run_name or f"seige-grpo-{args.agent_type}",
     )
