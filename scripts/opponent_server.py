@@ -138,10 +138,20 @@ if __name__ == "__main__":
         try:
             model.load_adapter(args.adapter_path, adapter_name=adapter_name, is_trainable=False)
         except TypeError:
-            model.load_adapter(args.adapter_path, adapter_name)
-        if hasattr(model, "set_adapter"):
-            model.set_adapter(adapter_name)
-        print(f"Loaded frozen adapter: {args.adapter_path}")
+            try:
+                model.load_adapter(args.adapter_path, adapter_name)
+            except Exception as exc:  # noqa: BLE001
+                print(f"WARNING: Could not load frozen adapter {args.adapter_path}; running baseline. {exc}")
+            else:
+                if hasattr(model, "set_adapter"):
+                    model.set_adapter(adapter_name)
+                print(f"Loaded frozen adapter: {args.adapter_path}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"WARNING: Could not load frozen adapter {args.adapter_path}; running baseline. {exc}")
+        else:
+            if hasattr(model, "set_adapter"):
+                model.set_adapter(adapter_name)
+            print(f"Loaded frozen adapter: {args.adapter_path}")
     else:
         print(f"WARNING: Adapter path not found. Running frozen baseline.")
         

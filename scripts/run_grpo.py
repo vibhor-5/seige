@@ -450,7 +450,14 @@ def _load_init_adapter(model, adapter_path: str, agent_type: str) -> None:
         model.load_adapter(adapter_path, adapter_name=adapter_name, is_trainable=True)
     except TypeError:
         # Older PEFT/Transformers adapter loaders used positional args.
-        model.load_adapter(adapter_path, adapter_name)
+        try:
+            model.load_adapter(adapter_path, adapter_name)
+        except Exception as exc:  # noqa: BLE001
+            print(f"WARNING: Could not load init adapter {adapter_path}; training from base LoRA. {exc}", flush=True)
+            return
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARNING: Could not load init adapter {adapter_path}; training from base LoRA. {exc}", flush=True)
+        return
     if hasattr(model, "set_adapter"):
         model.set_adapter(adapter_name)
 

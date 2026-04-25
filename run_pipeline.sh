@@ -639,6 +639,31 @@ PY
     BLUE_LATEST=$(echo "$loaded" | sed -n '4p')
 }
 
+adapter_matches_agent_model() {
+    local adapter_dir=$1
+    if [ ! -f "$adapter_dir/adapter_config.json" ]; then
+        return 0
+    fi
+    ADAPTER_DIR="$adapter_dir" SEIGE_AGENT_MODEL_ID="$SEIGE_AGENT_MODEL_ID" "$PYTHON_BIN" - <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+adapter_dir = Path(os.environ["ADAPTER_DIR"])
+expected = os.environ["SEIGE_AGENT_MODEL_ID"].lower().replace("unsloth/", "").replace("-bnb-4bit", "")
+try:
+    config = json.loads((adapter_dir / "adapter_config.json").read_text())
+except Exception:
+    sys.exit(0)
+actual = str(config.get("base_model_name_or_path") or "").lower().replace("unsloth/", "").replace("-bnb-4bit", "")
+if actual and actual != expected:
+    print(f"Adapter base model mismatch: expected {expected}, got {actual}", file=sys.stderr)
+    sys.exit(1)
+sys.exit(0)
+PY
+}
+
 restore_latest_hf_adapters_if_requested() {
     if [ "$SEIGE_HF_RESTORE" != "1" ]; then
         return
@@ -707,12 +732,22 @@ PY
     red_restore=$(echo "$restored" | sed -n 's/^RED=//p' | tail -n 1)
     blue_restore=$(echo "$restored" | sed -n 's/^BLUE=//p' | tail -n 1)
     if [ -n "$red_restore" ] && [ -d "$red_restore" ]; then
-        RED_LATEST="$red_restore"
-        echo "Restored latest RED adapter from HF: $RED_LATEST"
+        if adapter_matches_agent_model "$red_restore"; then
+            RED_LATEST="$red_restore"
+            echo "Restored latest RED adapter from HF: $RED_LATEST"
+        else
+            echo "Skipping incompatible RED adapter from HF: $red_restore"
+            log_event "hf_adapter_skipped" "{\"agent\":\"red\",\"path\":\"$red_restore\",\"reason\":\"base_model_mismatch\"}"
+        fi
     fi
     if [ -n "$blue_restore" ] && [ -d "$blue_restore" ]; then
-        BLUE_LATEST="$blue_restore"
-        echo "Restored latest BLUE adapter from HF: $BLUE_LATEST"
+        if adapter_matches_agent_model "$blue_restore"; then
+            BLUE_LATEST="$blue_restore"
+            echo "Restored latest BLUE adapter from HF: $BLUE_LATEST"
+        else
+            echo "Skipping incompatible BLUE adapter from HF: $blue_restore"
+            log_event "hf_adapter_skipped" "{\"agent\":\"blue\",\"path\":\"$blue_restore\",\"reason\":\"base_model_mismatch\"}"
+        fi
     fi
 }
 
