@@ -2,8 +2,13 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from openenv.core.env_server.types import Action, Observation
-from pydantic import Field
+from pydantic import BaseModel, Field
+
+try:
+    from openenv.core.env_server.types import Action, Observation
+except ImportError:  # pragma: no cover - optional dependency in training-only setups
+    Action = BaseModel  # type: ignore[assignment]
+    Observation = BaseModel  # type: ignore[assignment]
 
 
 class SeigeExplanation(Action):

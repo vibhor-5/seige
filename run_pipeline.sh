@@ -7,6 +7,8 @@ SEQUENTIAL_MODE=${SEQUENTIAL_MODE:-"1"}
 NUM_CYCLES=${NUM_CYCLES:-"1"}
 GRPO_MAX_STEPS=${GRPO_MAX_STEPS:-"200"}
 NUM_EPISODES=${NUM_EPISODES:-"100"}
+INSTALL_DEPS=${INSTALL_DEPS:-"1"}
+UNINSTALL_TORCHAO=${UNINSTALL_TORCHAO:-"1"}
 
 # Backward-compatible single-agent values.
 AGENT_TO_TRAIN=${AGENT_TO_TRAIN:-"red"}
@@ -26,6 +28,8 @@ echo "Proxy Episodes / leg: $NUM_EPISODES"
 echo "Init Adapter: $SFT_ADAPTER_PATH"
 echo "Output Directory: $OUTPUT_DIR"
 echo "Cycle Archive Dir: $CYCLE_ARCHIVE_DIR"
+echo "Install Dependencies: $INSTALL_DEPS"
+echo "Uninstall TorchAO: $UNINSTALL_TORCHAO"
 if [ -n "$WANDB_API_KEY" ]; then
     echo "WandB Logging: ENABLED"
 else
@@ -47,6 +51,50 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+PYTHON_BIN="$(command -v python3 || command -v python)"
+if [ -z "$PYTHON_BIN" ]; then
+    echo "ERROR: No python interpreter found (expected python3 or python)."
+    exit 1
+fi
+
+install_dependencies() {
+    echo "[0/4] Bootstrapping Python dependencies..."
+
+    local PIP_CMD
+    if command -v uv >/dev/null 2>&1; then
+        PIP_CMD="uv pip install --system"
+        echo "Using installer: uv pip"
+    else
+        PIP_CMD="$PYTHON_BIN -m pip install"
+        echo "Using installer: pip"
+    fi
+
+    if [ "$UNINSTALL_TORCHAO" == "1" ]; then
+        echo "Removing torchao to avoid torch/torchao incompatibility..."
+        if command -v uv >/dev/null 2>&1; then
+            uv pip uninstall --system -y torchao >/dev/null 2>&1 || true
+        else
+            "$PYTHON_BIN" -m pip uninstall -y torchao >/dev/null 2>&1 || true
+        fi
+    fi
+
+    # Core training/runtime dependencies.
+    $PIP_CMD \
+        openenv \
+        fastapi \
+        uvicorn \
+        requests \
+        datasets \
+        wandb \
+        trl \
+        peft \
+        accelerate \
+        bitsandbytes \
+        "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
+
+    echo "Dependency bootstrap complete."
+}
+
 start_opponent_server() {
     local opponent_type=$1
     local adapter_path=$2
@@ -54,7 +102,7 @@ start_opponent_server() {
     kill ${OPP_PID:-} 2>/dev/null || true
 
     echo "Starting Frozen Opponent ($opponent_type) on port $PORT_OPPONENT with $adapter_path..."
-    python scripts/opponent_server.py \
+    "$PYTHON_BIN" scripts/opponent_server.py \
         --adapter_path "$adapter_path" \
         --agent_type "$opponent_type" \
         --port $PORT_OPPONENT > opponent_server.log 2>&1 &
@@ -74,7 +122,7 @@ train_leg() {
     start_opponent_server "$frozen_type" "$frozen_adapter"
 
     echo "Training $trainee (cycle $cycle) | init=$init_adapter | frozen $frozen_type=$frozen_adapter"
-    python scripts/run_grpo.py \
+    "$PYTHON_BIN" scripts/run_grpo.py \
         --agent_type "$trainee" \
         --init_adapter "$init_adapter" \
         --env_url "http://localhost:$PORT_ENV" \
@@ -84,9 +132,14 @@ train_leg() {
         --run_name "seige-grpo-${trainee}-cycle${cycle}"
 }
 
+# 0. Install dependencies first (RunPod self-healing bootstrap)
+if [ "$INSTALL_DEPS" == "1" ]; then
+    install_dependencies
+fi
+
 # 1. Start the Environment Server
 echo "[1/4] Starting Target Environment Server on port $PORT_ENV..."
-uvicorn server.app:app --host 0.0.0.0 --port $PORT_ENV > env_server.log 2>&1 &
+"$PYTHON_BIN" -m uvicorn server.app:app --host 0.0.0.0 --port $PORT_ENV > env_server.log 2>&1 &
 ENV_PID=$!
 sleep 5 # Give FastAPI a moment to bind to the port
 
@@ -121,7 +174,7 @@ else
     fi
 
     start_opponent_server "$OPPONENT_TYPE" "$FROZEN_ADAPTER_PATH"
-    python scripts/run_grpo.py \
+    "$PYTHON_BIN" scripts/run_grpo.py \
         --agent_type "$AGENT_TO_TRAIN" \
         --init_adapter "$SFT_ADAPTER_PATH" \
         --env_url "http://localhost:$PORT_ENV" \
@@ -142,7 +195,7 @@ echo "Training phase completed."
 
 # 4. Run Evaluation to check progress
 echo "[4/4] Running automatic evaluation..."
-python scripts/evaluate.py \
+"$PYTHON_BIN" scripts/evaluate.py \
     --red_adapter "$RED_LATEST" \
     --blue_adapter "$BLUE_LATEST" \
     --env_url "http://localhost:$PORT_ENV" \
