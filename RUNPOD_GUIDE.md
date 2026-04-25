@@ -36,7 +36,13 @@ pip install --no-deps trl peft accelerate bitsandbytes
 ## Step 4: Download Your SFT Adapter
 Because the `sft_adapter` was too large for GitHub, we uploaded it to Hugging Face. Download it directly into the `seige` folder using a Python one-liner (this will be extremely fast on RunPod):
 ```bash
-uv run python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='BART-ender/seige-sft-adapter', local_dir='sft_adapter')"
+python3 -m pip install -U huggingface_hub
+python3 -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='BART-ender/seige-sft-adapter', local_dir='sft_adapter')"
+```
+
+If you prefer `uv`, avoid resolving the whole training project just to download files:
+```bash
+uv run --no-project --with huggingface-hub python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='BART-ender/seige-sft-adapter', local_dir='sft_adapter')"
 ```
 
 ## Step 5: Start Generational Training
