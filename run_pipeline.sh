@@ -9,9 +9,10 @@ GRPO_MAX_STEPS=${GRPO_MAX_STEPS:-"200"}
 NUM_EPISODES=${NUM_EPISODES:-"100"}
 INSTALL_DEPS=${INSTALL_DEPS:-"1"}
 UNINSTALL_TORCHAO=${UNINSTALL_TORCHAO:-"1"}
-TORCH_INDEX_URL=${TORCH_INDEX_URL:-"https://download.pytorch.org/whl/cu121"}
+# PyTorch 2.6+ wheels use cu124/cu126; cu121 often tops out at 2.5.x. Driver CUDA 12.x is compatible.
+TORCH_INDEX_URL=${TORCH_INDEX_URL:-"https://download.pytorch.org/whl/cu124"}
 SEIGE_FAST_INFERENCE=${SEIGE_FAST_INFERENCE:-"0"}
-TORCH_MIN_VERSION=${TORCH_MIN_VERSION:-"2.5.1"}
+TORCH_MIN_VERSION=${TORCH_MIN_VERSION:-"2.6.0"}
 RESUME_PIPELINE=${RESUME_PIPELINE:-"1"}
 # Hugging Face: after each leg, push the archived cycle adapter (requires HF_TOKEN and SEIGE_HF_REPO_ID).
 SEIGE_HF_PUSH=${SEIGE_HF_PUSH:-"0"}

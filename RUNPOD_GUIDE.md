@@ -31,6 +31,8 @@ pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
 pip install --no-deps trl peft accelerate bitsandbytes
 ```
 
+**Resume / optimizer state:** this repo pins **torch ≥ 2.6** so `transformers` can load checkpoint `optimizer.pt` / `scheduler.pt` (older 2.5 + recent `transformers` raises a `torch.load` / CVE-2025-32434 error). The default `./run_pipeline.sh` `TORCH_INDEX_URL` is `cu124` for those wheels. Run `INSTALL_DEPS=1 ./run_pipeline.sh` (or match `requirements.txt` to that index) so the template’s PyTorch is not left at 2.5.x.
+
 ## Step 4: Download Your SFT Adapter
 Because the `sft_adapter` was too large for GitHub, we uploaded it to Hugging Face. Download it directly into the `seige` folder using a Python one-liner (this will be extremely fast on RunPod):
 ```bash
