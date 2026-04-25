@@ -4,11 +4,14 @@ import argparse
 import json
 import os
 import pickle
+import sys
 from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from environment.direction_library import DIRECTION_LABELS, INTENT_CLASSES, DirectionLibrary
 from environment.target_system import DEFAULT_TARGET_MODEL_ID, TransformerLensTargetSystem
