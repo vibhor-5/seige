@@ -7,8 +7,7 @@ from typing import Any
 from .state import TargetSystemState
 
 
-MAX_TURNS = 20
-
+from .constants import MAX_TURNS
 
 @dataclass
 class RedObservation:

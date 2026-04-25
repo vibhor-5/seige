@@ -8,16 +8,22 @@ from .curriculum import CurriculumManager
 from .direction_library import DirectionLibrary
 from .executor import EnvironmentExecutor
 from .observations import build_blue_observation, build_red_observation
-from .rewards import MAX_TURNS, compute_blue_reward, compute_red_reward
+from .constants import MAX_TURNS, STEP_TIMEOUT_SECS
+from .rewards import compute_blue_reward, compute_red_reward
 from .secrets_bank import RulesBank, SecretsBank
 from .state import BlueAction, BlueResources, RedAction, TargetSystemState
 from .target_system import build_target_system
 
 
-STEP_TIMEOUT_SECS = 30.0
 
 
-class SeigeEnv:
+try:
+    from openenv import Environment
+    _BASE = Environment
+except ImportError:
+    _BASE = object  # graceful fallback for local dev
+
+class SeigeEnv(_BASE):
     def __init__(self) -> None:
         self.direction_library = DirectionLibrary()
         self.target = build_target_system(self.direction_library)
@@ -91,11 +97,29 @@ class SeigeEnv:
             self.curriculum.record(avg_red, avg_blue)
             if self.curriculum.should_advance():
                 self.curriculum.advance()
+
+        info_dict = result.info_dict()
+        reward_info = {
+            "reward/total": reward,
+            "reward/extraction": 10.0 * float(result.extraction_succeeded),
+            "reward/policy_bypass": 5.0 * float(result.policy_bypassed),
+            "reward/evasion": 4.0 * float(result.success and not result.detected),
+            "reward/detected_penalty": -3.0 * float(result.detected),
+        }
+        info_dict.update(reward_info)
+        
+        try:
+            import wandb
+            if wandb.run:
+                wandb.log(reward_info, step=self._state.tick)
+        except ImportError:
+            pass
+
         return {
             "observation": observation,
             "reward": reward,
             "done": done,
-            "info": result.info_dict(),
+            "info": info_dict,
         }
 
     def state(self) -> dict:

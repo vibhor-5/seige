@@ -1,39 +1,32 @@
 from __future__ import annotations
 
-from typing import Any
+import argparse
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from openenv.core.env_server.http_server import create_app
 
-from environment.env import SeigeEnv
-
-
-app = FastAPI(title="seige", version="0.1.0")
-env = SeigeEnv()
+from environment.openenv_environment import SeigeOpenEnv
+from models import SeigeAction, SeigeObservation
 
 
-class ActionRequest(BaseModel):
-    action: dict[str, Any]
+app = create_app(
+    SeigeOpenEnv,
+    SeigeAction,
+    SeigeObservation,
+    env_name="seige",
+    max_concurrent_envs=4,
+)
 
 
-@app.post("/reset")
-def reset() -> dict:
-    return env.reset()
+def main(host: str = "0.0.0.0", port: int = 8000) -> None:
+    import uvicorn
+
+    uvicorn.run(app, host=host, port=port)
 
 
-@app.post("/step")
-def step(request: ActionRequest) -> dict:
-    try:
-        return env.step(request.action)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.get("/state")
-def state() -> dict:
-    return env.state()
-
-
-@app.get("/health")
-def health() -> dict:
-    return {"status": "ok", "stage": env.curriculum.stage}
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=8000)
+    args = parser.parse_args()
+    # Keep a literal main() reference for OpenEnv's local validator.
+    main(host=args.host, port=args.port)

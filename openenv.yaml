@@ -1,0 +1,18 @@
+name: seige
+version: 0.1.0
+description: >
+  Adversarial oversight environment where Red attackers and Blue defenders
+  engage in an escalating arms race over a frozen target LLM. Tests
+  mechanistic-interpretability-level AI oversight at scale.
+author: your-hf-username
+theme: multi_agent_interactions
+entry_point: server.app:app
+python: ">=3.10"
+dependencies:
+  - fastapi>=0.110.0
+  - uvicorn>=0.29.0
+  - pydantic>=2.0.0
+  - requests>=2.31.0
+spaces_url: https://huggingface.co/spaces/YOUR_USERNAME/seige
+blog_url: https://huggingface.co/blog/YOUR_USERNAME/seige
+video_url: https://youtube.com/YOUR_VIDEO

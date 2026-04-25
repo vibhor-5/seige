@@ -26,6 +26,15 @@ def grpo_config(output_dir: str, run_name: str):
         output_dir=output_dir,
         report_to=os.getenv("SEIGE_REPORT_TO", "wandb"),
         run_name=run_name,
+        num_generations=8,
+        max_prompt_length=1024,
+        max_completion_length=256,
+        temperature=0.8,
+        beta=0.04,
+        use_vllm=False,
+        reward_weights=None,
+        save_steps=50,
+        eval_steps=50,
     )
 
 
