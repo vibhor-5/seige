@@ -10,6 +10,7 @@ NUM_EPISODES=${NUM_EPISODES:-"100"}
 INSTALL_DEPS=${INSTALL_DEPS:-"1"}
 UNINSTALL_TORCHAO=${UNINSTALL_TORCHAO:-"1"}
 TORCH_INDEX_URL=${TORCH_INDEX_URL:-"https://download.pytorch.org/whl/cu121"}
+SEIGE_FAST_INFERENCE=${SEIGE_FAST_INFERENCE:-"0"}
 
 # Backward-compatible single-agent values.
 AGENT_TO_TRAIN=${AGENT_TO_TRAIN:-"red"}
@@ -32,6 +33,7 @@ echo "Cycle Archive Dir: $CYCLE_ARCHIVE_DIR"
 echo "Install Dependencies: $INSTALL_DEPS"
 echo "Uninstall TorchAO: $UNINSTALL_TORCHAO"
 echo "Torch Index URL: $TORCH_INDEX_URL"
+echo "SEIGE_FAST_INFERENCE: $SEIGE_FAST_INFERENCE"
 if [ -n "$WANDB_API_KEY" ]; then
     echo "WandB Logging: ENABLED"
 else
@@ -60,11 +62,54 @@ if [ -z "$PYTHON_BIN" ]; then
 fi
 
 export TRANSFORMERS_NO_TORCHAO=1
+export SEIGE_FAST_INFERENCE
+
+DEBUG_LOG_PATH="/Users/vibhorkumar/Desktop/codes/seige/.cursor/debug-712a1a.log"
+DEBUG_RUN_ID="${DEBUG_RUN_ID:-run_pipeline_debug}"
+DEBUG_SESSION_ID="712a1a"
+
+debug_log() {
+    local hypothesis_id="$1"
+    local location="$2"
+    local message="$3"
+    local data_json="$4"
+    DEBUG_HYPOTHESIS_ID="$hypothesis_id" \
+    DEBUG_LOCATION="$location" \
+    DEBUG_MESSAGE="$message" \
+    DEBUG_DATA_JSON="$data_json" \
+    DEBUG_LOG_PATH="$DEBUG_LOG_PATH" \
+    DEBUG_RUN_ID="$DEBUG_RUN_ID" \
+    DEBUG_SESSION_ID="$DEBUG_SESSION_ID" \
+    "$PYTHON_BIN" - <<'PY'
+import json
+import os
+import time
+
+payload = {
+    "sessionId": os.environ["DEBUG_SESSION_ID"],
+    "runId": os.environ["DEBUG_RUN_ID"],
+    "hypothesisId": os.environ["DEBUG_HYPOTHESIS_ID"],
+    "location": os.environ["DEBUG_LOCATION"],
+    "message": os.environ["DEBUG_MESSAGE"],
+    "timestamp": int(time.time() * 1000),
+}
+raw_data = os.environ.get("DEBUG_DATA_JSON", "{}")
+try:
+    payload["data"] = json.loads(raw_data)
+except Exception:
+    payload["data"] = {"raw": raw_data}
+with open(os.environ["DEBUG_LOG_PATH"], "a", encoding="utf-8") as fp:
+    fp.write(json.dumps(payload, ensure_ascii=True) + "\n")
+PY
+}
 
 install_dependencies() {
     echo "[0/4] Bootstrapping Python dependencies..."
     local PIP_CMD="$PYTHON_BIN -m pip install"
     echo "Using installer: $PYTHON_BIN -m pip"
+    # #region agent log
+    debug_log "H1" "run_pipeline.sh:install_dependencies:start" "Dependency bootstrap start" "{\"python_bin\":\"$PYTHON_BIN\",\"pwd\":\"$(pwd)\",\"path\":\"$PATH\"}"
+    # #endregion
 
     if [ "$UNINSTALL_TORCHAO" == "1" ]; then
         echo "Removing torchao to avoid torch/torchao incompatibility..."
@@ -93,6 +138,19 @@ install_dependencies() {
     else
         echo "Torch is available."
     fi
+    # #region agent log
+    debug_log "H2" "run_pipeline.sh:install_dependencies:torch_check" "Torch verification complete" "$("$PYTHON_BIN" - <<'PY'
+import json
+import sys
+try:
+    import torch
+    payload = {"ok": True, "torch_version": torch.__version__, "executable": sys.executable, "prefix": sys.prefix}
+except Exception as exc:
+    payload = {"ok": False, "error": repr(exc), "executable": sys.executable, "prefix": sys.prefix}
+print(json.dumps(payload))
+PY
+)"
+    # #endregion
 
     if [ ! -f "requirements.txt" ]; then
         echo "ERROR: requirements.txt not found in $(pwd)"
@@ -101,6 +159,20 @@ install_dependencies() {
 
     echo "Installing Python requirements from requirements.txt..."
     $PIP_CMD -r requirements.txt
+    # #region agent log
+    debug_log "H3" "run_pipeline.sh:install_dependencies:post_requirements" "Post requirements install module probe" "$("$PYTHON_BIN" - <<'PY'
+import importlib.util
+import json
+import sys
+mods = ["datasets", "trl", "peft", "wandb", "torchao"]
+print(json.dumps({
+    "executable": sys.executable,
+    "prefix": sys.prefix,
+    "modules": {m: bool(importlib.util.find_spec(m)) for m in mods},
+}))
+PY
+)"
+    # #endregion
 
     # Some dependency graphs can re-introduce torchao transitively. Remove it
     # again after full requirements installation and verify it's gone.
@@ -118,6 +190,14 @@ install_dependencies() {
 
     # Validate critical imports before starting servers/training.
     "$PYTHON_BIN" -c "import datasets, requests, fastapi, uvicorn, trl, peft, wandb"
+    # #region agent log
+    debug_log "H4" "run_pipeline.sh:install_dependencies:critical_imports" "Critical import gate passed" "$("$PYTHON_BIN" - <<'PY'
+import json
+import sys
+print(json.dumps({"ok": True, "executable": sys.executable, "prefix": sys.prefix}))
+PY
+)"
+    # #endregion
 
     echo "Dependency bootstrap complete."
 }
@@ -149,6 +229,9 @@ train_leg() {
     start_opponent_server "$frozen_type" "$frozen_adapter"
 
     echo "Training $trainee (cycle $cycle) | init=$init_adapter | frozen $frozen_type=$frozen_adapter"
+    # #region agent log
+    debug_log "H5" "run_pipeline.sh:train_leg:before_run_grpo" "About to launch run_grpo.py" "{\"trainee\":\"$trainee\",\"cycle\":\"$cycle\",\"python_bin\":\"$PYTHON_BIN\",\"env_url\":\"http://localhost:$PORT_ENV\"}"
+    # #endregion
     "$PYTHON_BIN" scripts/run_grpo.py \
         --agent_type "$trainee" \
         --init_adapter "$init_adapter" \

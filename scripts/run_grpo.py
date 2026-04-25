@@ -82,6 +82,9 @@ def parse_args():
         args.init_adapter = args.sft_adapter
     return args
 
+def _use_fast_inference() -> bool:
+    return os.getenv("SEIGE_FAST_INFERENCE", "0") == "1"
+
 def main():
     args = parse_args()
     
@@ -96,7 +99,7 @@ def main():
         model_name=args.base_model,
         max_seq_length=max_seq_length,
         load_in_4bit=True,
-        fast_inference=True,
+        fast_inference=_use_fast_inference(),
     )
     
     # Set PEFT / LoRA params
