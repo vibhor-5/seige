@@ -4,6 +4,7 @@ import argparse
 import math
 import hashlib
 import warnings
+import shutil
 import torch
 from typing import List
 from collections import defaultdict
@@ -50,6 +51,7 @@ from unsloth import FastLanguageModel, PatchFastRL
 # Patch TRL to use Unsloth's optimized GRPO implementation
 PatchFastRL("GRPO", FastLanguageModel)
 from trl import GRPOConfig, GRPOTrainer
+from transformers import TrainerCallback
 
 # Add parent directory to path so we can import client
 import sys
@@ -370,6 +372,131 @@ def _invalid_penalty_ramp(reward_call_idx: int) -> float:
     lo = float(os.getenv("SEIGE_INVALID_PENALTY_RAMP_START", "0.62"))
     return lo + (1.0 - lo) * p
 
+
+def _model_device(model) -> torch.device:
+    explicit = getattr(model, "device", None)
+    if explicit is not None:
+        return torch.device(explicit)
+    try:
+        return next(model.parameters()).device
+    except StopIteration:
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+class BestLossAndSampleCallback(TrainerCallback):
+    """Persist the lowest-loss adapter and periodically print prompt/output samples."""
+
+    def __init__(
+        self,
+        *,
+        model,
+        tokenizer,
+        output_dir: str,
+        sample_prompts: list,
+        agent_type: str,
+    ) -> None:
+        self.model = model
+        self.tokenizer = tokenizer
+        self.output_dir = Path(output_dir)
+        self.best_dir = self.output_dir / "best_adapter"
+        self.sample_prompts = sample_prompts
+        self.agent_type = agent_type
+        self.best_loss: float | None = None
+        self.best_step: int | None = None
+        self.sample_every = int(os.getenv("SEIGE_SAMPLE_EVERY_STEPS", "10"))
+        self.sample_max_new_tokens = int(os.getenv("SEIGE_SAMPLE_MAX_NEW_TOKENS", "220"))
+        self.sample_temperature = float(os.getenv("SEIGE_SAMPLE_TEMPERATURE", "0.7"))
+
+    def on_log(self, args, state, control, logs=None, **kwargs):  # noqa: ANN001
+        logs = logs or {}
+        step = int(getattr(state, "global_step", 0) or 0)
+        loss = self._parse_float(logs.get("loss"))
+        if loss is not None and (self.best_loss is None or loss < self.best_loss):
+            self._save_best(loss, step)
+        if self.sample_every > 0 and step > 0 and step % self.sample_every == 0:
+            self._print_sample(step, loss)
+        return control
+
+    @staticmethod
+    def _parse_float(value) -> float | None:
+        if value is None:
+            return None
+        try:
+            out = float(value)
+        except (TypeError, ValueError):
+            return None
+        if math.isnan(out) or math.isinf(out):
+            return None
+        return out
+
+    def _save_best(self, loss: float, step: int) -> None:
+        self.best_loss = loss
+        self.best_step = step
+        tmp_dir = self.output_dir / ".best_adapter_tmp"
+        if tmp_dir.exists():
+            shutil.rmtree(tmp_dir)
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        self.model.save_pretrained(str(tmp_dir))
+        self.tokenizer.save_pretrained(str(tmp_dir))
+        metrics = {
+            "metric": "train/loss",
+            "best_loss": loss,
+            "best_step": step,
+            "agent_type": self.agent_type,
+        }
+        (tmp_dir / "best_metrics.json").write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
+        if self.best_dir.exists():
+            shutil.rmtree(self.best_dir)
+        tmp_dir.rename(self.best_dir)
+        print(f"[best-adapter] step={step} loss={loss:.6g} saved={self.best_dir}", flush=True)
+
+    def _print_sample(self, step: int, loss: float | None) -> None:
+        if not self.sample_prompts:
+            return
+        sample = self.sample_prompts[(step // max(1, self.sample_every)) % len(self.sample_prompts)]
+        try:
+            prompt_text = self.tokenizer.apply_chat_template(sample, tokenize=False, add_generation_prompt=True)
+            device = _model_device(self.model)
+            inputs = self.tokenizer(prompt_text, return_tensors="pt").to(device)
+            was_training = bool(getattr(self.model, "training", False))
+            self.model.eval()
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    **inputs,
+                    max_new_tokens=self.sample_max_new_tokens,
+                    do_sample=True,
+                    temperature=self.sample_temperature,
+                    pad_token_id=getattr(self.tokenizer, "pad_token_id", None),
+                )
+            if was_training:
+                self.model.train()
+            completion = self.tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True).strip()
+            print("\n=== SEIGE TRAINING SAMPLE ===", flush=True)
+            print(f"agent={self.agent_type} step={step} loss={loss}", flush=True)
+            print("--- prompt ---", flush=True)
+            print(sample[-1]["content"], flush=True)
+            print("--- model output ---", flush=True)
+            print(completion, flush=True)
+            print("=== END SEIGE TRAINING SAMPLE ===\n", flush=True)
+            try:
+                import wandb
+                if wandb.run:
+                    wandb.log(
+                        {
+                            "train/sample/step": step,
+                            "train/sample/prompt": sample[-1]["content"],
+                            "train/sample/output": completion,
+                            "train/sample/loss": loss,
+                        }
+                    )
+            except Exception:
+                pass
+        except Exception as ex:  # noqa: BLE001
+            if bool(getattr(self.model, "training", False)) is False:
+                self.model.train()
+            print(f"[sample] failed at step={step}: {ex}", flush=True)
+
+
 def main():
     args = parse_args()
     _suppress_noisy_train_warnings()
@@ -552,6 +679,13 @@ def main():
     train_dataset = Dataset.from_dict({"prompt": prompts})
 
     agent_output_dir = os.path.join(args.output_dir, f"grpo_{args.agent_type}")
+    best_callback = BestLossAndSampleCallback(
+        model=model,
+        tokenizer=tokenizer,
+        output_dir=agent_output_dir,
+        sample_prompts=prompts[: max(1, int(os.getenv("SEIGE_SAMPLE_PROMPT_POOL", "8")))],
+        agent_type=args.agent_type,
+    )
     
     # Configure GRPO
     training_args = GRPOConfig(
@@ -579,6 +713,7 @@ def main():
         reward_funcs=[combined_reward_func],
         args=training_args,
         train_dataset=train_dataset,
+        callbacks=[best_callback],
     )
 
     print("Starting GRPO Training...")
@@ -594,6 +729,18 @@ def main():
     model.save_pretrained(final_path)
     tokenizer.save_pretrained(final_path)
     print(f"Final {args.agent_type.upper()} GRPO adapter saved to {final_path}")
+    best_path = os.path.join(agent_output_dir, "best_adapter")
+    if not os.path.isdir(best_path):
+        shutil.copytree(final_path, best_path)
+        metrics = {
+            "metric": "train/loss",
+            "best_loss": best_callback.best_loss,
+            "best_step": best_callback.best_step,
+            "agent_type": args.agent_type,
+            "fallback": "final_adapter_no_logged_loss",
+        }
+        Path(best_path, "best_metrics.json").write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
+    print(f"Best {args.agent_type.upper()} GRPO adapter available at {best_path}")
 
 if __name__ == "__main__":
     main()

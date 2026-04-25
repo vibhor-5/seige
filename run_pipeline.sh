@@ -359,6 +359,17 @@ hf_upload_if_enabled() {
         "${PRIV[@]}"
 }
 
+select_agent_adapter() {
+    local agent=$1
+    local best="$OUTPUT_DIR/grpo_${agent}/best_adapter"
+    local final="$OUTPUT_DIR/grpo_${agent}/final_adapter"
+    if [ -d "$best" ]; then
+        echo "$best"
+    else
+        echo "$final"
+    fi
+}
+
 load_state_if_requested() {
     if [ "$RESUME_PIPELINE" != "1" ]; then
         return
@@ -408,7 +419,7 @@ if [ "$SEQUENTIAL_MODE" == "1" ]; then
 
         if [ "$next_agent" = "red" ]; then
             train_leg "red" "$RED_LATEST" "blue" "$BLUE_LATEST" "$cycle"
-            RED_LATEST="$OUTPUT_DIR/grpo_red/final_adapter"
+            RED_LATEST="$(select_agent_adapter red)"
             RED_ARCHIVE="$CYCLE_ARCHIVE_DIR/red_cycle_${cycle}"
             rm -rf "$RED_ARCHIVE"
             cp -R "$RED_LATEST" "$RED_ARCHIVE"
@@ -421,7 +432,7 @@ if [ "$SEQUENTIAL_MODE" == "1" ]; then
         fi
 
         train_leg "blue" "$BLUE_LATEST" "red" "$RED_LATEST" "$cycle"
-        BLUE_LATEST="$OUTPUT_DIR/grpo_blue/final_adapter"
+        BLUE_LATEST="$(select_agent_adapter blue)"
         BLUE_ARCHIVE="$CYCLE_ARCHIVE_DIR/blue_cycle_${cycle}"
         rm -rf "$BLUE_ARCHIVE"
         cp -R "$BLUE_LATEST" "$BLUE_ARCHIVE"
@@ -451,12 +462,12 @@ else
         --max_steps "$GRPO_MAX_STEPS"
 
     if [ "$AGENT_TO_TRAIN" == "red" ]; then
-        RED_LATEST="$OUTPUT_DIR/grpo_red/final_adapter"
+        RED_LATEST="$(select_agent_adapter red)"
         BLUE_LATEST="$FROZEN_ADAPTER_PATH"
         hf_upload_if_enabled "grpo_red_single" "$RED_LATEST"
     else
         RED_LATEST="$FROZEN_ADAPTER_PATH"
-        BLUE_LATEST="$OUTPUT_DIR/grpo_blue/final_adapter"
+        BLUE_LATEST="$(select_agent_adapter blue)"
         hf_upload_if_enabled "grpo_blue_single" "$BLUE_LATEST"
     fi
 fi
