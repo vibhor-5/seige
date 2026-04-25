@@ -82,10 +82,27 @@ install_dependencies() {
 
     echo "Ensuring torch is installed..."
     if ! "$PYTHON_BIN" -c "import torch" >/dev/null 2>&1; then
-        echo "Torch not found. Installing torch/torchvision/torchaudio from $TORCH_INDEX_URL"
-        $PIP_CMD --index-url "$TORCH_INDEX_URL" torch torchvision torchaudio
+        echo "Torch not found. Installing torch/torchvision/torchaudio via pip from $TORCH_INDEX_URL"
+        "$PYTHON_BIN" -m ensurepip --upgrade >/dev/null 2>&1 || true
+        "$PYTHON_BIN" -m pip install --upgrade pip setuptools wheel >/dev/null 2>&1 || true
+        "$PYTHON_BIN" -m pip install --index-url "$TORCH_INDEX_URL" torch torchvision torchaudio
+    fi
+
+    # Hard verification + fallback path when uv/pip environment wiring is inconsistent.
+    if ! "$PYTHON_BIN" -c "import torch; print(torch.__version__)" >/dev/null 2>&1; then
+        echo "Torch import still failing after pip install. Trying uv fallback..."
+        if command -v uv >/dev/null 2>&1; then
+            uv pip install --system --index-url "$TORCH_INDEX_URL" torch torchvision torchaudio
+        fi
+    fi
+
+    if ! "$PYTHON_BIN" -c "import torch; print(torch.__version__)" >/dev/null 2>&1; then
+        echo "ERROR: torch is not importable by $PYTHON_BIN after installation attempts."
+        echo "Python executable: $PYTHON_BIN"
+        "$PYTHON_BIN" -c "import sys; print('sys.executable=', sys.executable); print('sys.path=', sys.path)"
+        exit 1
     else
-        echo "Torch already available."
+        echo "Torch is available."
     fi
 
     # Core training/runtime dependencies.
