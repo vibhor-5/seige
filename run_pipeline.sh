@@ -9,6 +9,7 @@ GRPO_MAX_STEPS=${GRPO_MAX_STEPS:-"200"}
 NUM_EPISODES=${NUM_EPISODES:-"100"}
 INSTALL_DEPS=${INSTALL_DEPS:-"1"}
 UNINSTALL_TORCHAO=${UNINSTALL_TORCHAO:-"1"}
+TORCH_INDEX_URL=${TORCH_INDEX_URL:-"https://download.pytorch.org/whl/cu121"}
 
 # Backward-compatible single-agent values.
 AGENT_TO_TRAIN=${AGENT_TO_TRAIN:-"red"}
@@ -30,6 +31,7 @@ echo "Output Directory: $OUTPUT_DIR"
 echo "Cycle Archive Dir: $CYCLE_ARCHIVE_DIR"
 echo "Install Dependencies: $INSTALL_DEPS"
 echo "Uninstall TorchAO: $UNINSTALL_TORCHAO"
+echo "Torch Index URL: $TORCH_INDEX_URL"
 if [ -n "$WANDB_API_KEY" ]; then
     echo "WandB Logging: ENABLED"
 else
@@ -76,6 +78,14 @@ install_dependencies() {
         else
             "$PYTHON_BIN" -m pip uninstall -y torchao >/dev/null 2>&1 || true
         fi
+    fi
+
+    echo "Ensuring torch is installed..."
+    if ! "$PYTHON_BIN" -c "import torch" >/dev/null 2>&1; then
+        echo "Torch not found. Installing torch/torchvision/torchaudio from $TORCH_INDEX_URL"
+        $PIP_CMD --index-url "$TORCH_INDEX_URL" torch torchvision torchaudio
+    else
+        echo "Torch already available."
     fi
 
     # Core training/runtime dependencies.
