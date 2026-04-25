@@ -61,23 +61,12 @@ fi
 
 install_dependencies() {
     echo "[0/4] Bootstrapping Python dependencies..."
-
-    local PIP_CMD
-    if command -v uv >/dev/null 2>&1; then
-        PIP_CMD="uv pip install --system"
-        echo "Using installer: uv pip"
-    else
-        PIP_CMD="$PYTHON_BIN -m pip install"
-        echo "Using installer: pip"
-    fi
+    local PIP_CMD="$PYTHON_BIN -m pip install"
+    echo "Using installer: $PYTHON_BIN -m pip"
 
     if [ "$UNINSTALL_TORCHAO" == "1" ]; then
         echo "Removing torchao to avoid torch/torchao incompatibility..."
-        if command -v uv >/dev/null 2>&1; then
-            uv pip uninstall --system -y torchao >/dev/null 2>&1 || true
-        else
-            "$PYTHON_BIN" -m pip uninstall -y torchao >/dev/null 2>&1 || true
-        fi
+        "$PYTHON_BIN" -m pip uninstall -y torchao >/dev/null 2>&1 || true
     fi
 
     echo "Ensuring torch is installed..."
@@ -90,10 +79,8 @@ install_dependencies() {
 
     # Hard verification + fallback path when uv/pip environment wiring is inconsistent.
     if ! "$PYTHON_BIN" -c "import torch; print(torch.__version__)" >/dev/null 2>&1; then
-        echo "Torch import still failing after pip install. Trying uv fallback..."
-        if command -v uv >/dev/null 2>&1; then
-            uv pip install --system --index-url "$TORCH_INDEX_URL" torch torchvision torchaudio
-        fi
+        echo "Torch import still failing after pip install. Retrying with no cache..."
+        "$PYTHON_BIN" -m pip install --no-cache-dir --index-url "$TORCH_INDEX_URL" torch torchvision torchaudio
     fi
 
     if ! "$PYTHON_BIN" -c "import torch; print(torch.__version__)" >/dev/null 2>&1; then
@@ -105,19 +92,16 @@ install_dependencies() {
         echo "Torch is available."
     fi
 
-    # Core training/runtime dependencies.
-    $PIP_CMD \
-        openenv \
-        fastapi \
-        uvicorn \
-        requests \
-        datasets \
-        wandb \
-        trl \
-        peft \
-        accelerate \
-        bitsandbytes \
-        "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
+    if [ ! -f "requirements.txt" ]; then
+        echo "ERROR: requirements.txt not found in $(pwd)"
+        exit 1
+    fi
+
+    echo "Installing Python requirements from requirements.txt..."
+    $PIP_CMD -r requirements.txt
+
+    # Validate critical imports before starting servers/training.
+    "$PYTHON_BIN" -c "import datasets, requests, fastapi, uvicorn, trl, peft, wandb"
 
     echo "Dependency bootstrap complete."
 }
