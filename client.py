@@ -3,35 +3,51 @@ from __future__ import annotations
 from typing import Any
 
 import requests
-from openenv.core import EnvClient
-from openenv.core.client_types import StepResult
-from openenv.core.env_server.types import State
+
+try:
+    from openenv.core import EnvClient
+    from openenv.core.client_types import StepResult
+    from openenv.core.env_server.types import State
+    _OPENENV_AVAILABLE = True
+except ImportError:  # pragma: no cover - optional dependency for OpenEnv client
+    EnvClient = object  # type: ignore[assignment]
+    StepResult = Any  # type: ignore[assignment]
+    State = Any  # type: ignore[assignment]
+    _OPENENV_AVAILABLE = False
 
 from models import SeigeAction, SeigeObservation
 
 
-class SeigeOpenEnvClient(EnvClient[SeigeAction, SeigeObservation, State]):
-    def _step_payload(self, action: SeigeAction) -> dict[str, Any]:
-        return action.model_dump(exclude_none=True)
+if _OPENENV_AVAILABLE:
+    class SeigeOpenEnvClient(EnvClient[SeigeAction, SeigeObservation, State]):
+        def _step_payload(self, action: SeigeAction) -> dict[str, Any]:
+            return action.model_dump(exclude_none=True)
 
-    def _parse_result(self, payload: dict[str, Any]) -> StepResult[SeigeObservation]:
-        obs_data = payload.get("observation", {})
-        observation = SeigeObservation(
-            red=obs_data.get("red"),
-            blue=obs_data.get("blue"),
-            current_agent=obs_data.get("current_agent", "both"),
-            info=obs_data.get("info", {}),
-            done=payload.get("done", False),
-            reward=payload.get("reward"),
-        )
-        return StepResult(
-            observation=observation,
-            reward=payload.get("reward"),
-            done=payload.get("done", False),
-        )
+        def _parse_result(self, payload: dict[str, Any]) -> StepResult[SeigeObservation]:
+            obs_data = payload.get("observation", {})
+            observation = SeigeObservation(
+                red=obs_data.get("red"),
+                blue=obs_data.get("blue"),
+                current_agent=obs_data.get("current_agent", "both"),
+                info=obs_data.get("info", {}),
+                done=payload.get("done", False),
+                reward=payload.get("reward"),
+            )
+            return StepResult(
+                observation=observation,
+                reward=payload.get("reward"),
+                done=payload.get("done", False),
+            )
 
-    def _parse_state(self, payload: dict[str, Any]) -> State:
-        return State(**payload)
+        def _parse_state(self, payload: dict[str, Any]) -> State:
+            return State(**payload)
+else:
+    class SeigeOpenEnvClient:  # pragma: no cover - only used when optional dep missing
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            raise ImportError(
+                "openenv is not installed. Install it to use SeigeOpenEnvClient, "
+                "or use SeigeClient for plain HTTP training/eval workflows."
+            )
 
 
 class SeigeClient:
