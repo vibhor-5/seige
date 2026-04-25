@@ -366,9 +366,54 @@ def _fallback_blue_action(obs: dict) -> dict:
 
 
 def _ensure_agent_action(action: dict, agent_type: str, obs: dict) -> dict:
-    if isinstance(action, dict) and action.get("agent_type") == agent_type:
-        return action
-    return _fallback_red_action(obs) if agent_type == "red" else _fallback_blue_action(obs)
+    if not isinstance(action, dict) or action.get("agent_type") != agent_type:
+        return _fallback_red_action(obs) if agent_type == "red" else _fallback_blue_action(obs)
+    if agent_type == "red":
+        allowed = set(obs.get("available_strategies") or [])
+        strategy = str(action.get("strategy", ""))
+        if allowed and strategy not in allowed:
+            return _fallback_red_action(obs)
+        payload = action.get("payload", "")
+        if not isinstance(payload, str):
+            payload = json.dumps(payload, sort_keys=True)
+        if not payload.strip():
+            return _fallback_red_action(obs)
+        cleaned = {
+            "agent_type": "red",
+            "strategy": strategy,
+            "sub_strategy": str(action.get("sub_strategy", "model_action")),
+            "payload": payload,
+        }
+        if action.get("target_layer") is not None:
+            try:
+                cleaned["target_layer"] = int(action["target_layer"])
+            except (TypeError, ValueError):
+                pass
+        if action.get("direction_label") is not None:
+            cleaned["direction_label"] = str(action["direction_label"])
+        if action.get("magnitude") is not None:
+            try:
+                cleaned["magnitude"] = float(action["magnitude"])
+            except (TypeError, ValueError):
+                cleaned["magnitude"] = 0.5
+        return cleaned
+
+    action_type = str(action.get("action_type", ""))
+    if action_type not in {"monitor", "probe", "flag", "block", "patch", "explain", "defer"}:
+        return _fallback_blue_action(obs)
+    cleaned = {
+        "agent_type": "blue",
+        "action_type": action_type,
+        "session_id": str(action.get("session_id") or _fallback_blue_action(obs)["session_id"]),
+    }
+    if action.get("layer") is not None:
+        try:
+            cleaned["layer"] = int(action["layer"])
+        except (TypeError, ValueError):
+            pass
+    if isinstance(action.get("explanation"), dict):
+        cleaned["explanation"] = action["explanation"]
+    return cleaned
 
 
 def _sample_prompt_observations(env_client: SeigeClient, agent_type: str, count: int) -> list[dict]:
@@ -687,10 +732,15 @@ def main():
                     # of accidentally treating red's positive reward as blue's reward.
                     info = red_setup.get("info", {}) if isinstance(red_setup, dict) else {}
                     return -abs(float(red_setup.get("reward", 0.0))), info
-                blue_result = env_client.step(action)
+                if hasattr(env_client, "observation_for"):
+                    blue_obs = env_client.observation_for("blue")
+                else:
+                    blue_obs = _agent_observation(red_setup.get("observation", {}), "blue")
+                blue_result = env_client.step(_ensure_agent_action(action, "blue", blue_obs))
                 return float(blue_result.get("reward", 0.0)), blue_result.get("info", {})
 
-            red_result = env_client.step(action)
+            red_obs = _agent_observation(reset_obs, "red")
+            red_result = env_client.step(_ensure_agent_action(action, "red", red_obs))
             if red_result.get("done", False):
                 return float(red_result.get("reward", 0.0)), red_result.get("info", {})
             if hasattr(env_client, "observation_for"):

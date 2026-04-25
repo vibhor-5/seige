@@ -60,7 +60,12 @@ class SeigeClient:
         return payload.get("observation", payload)
 
     def step(self, action: dict[str, Any]) -> dict:
-        payload = self._json(self._post("/step", action), "/step")
+        response = self._post("/step", {"action": action})
+        if response.status_code == 422:
+            # Older compatibility servers accepted the raw action body; OpenEnv
+            # create_app expects {"action": ...}. Retry raw only for old servers.
+            response = self._post("/step", action)
+        payload = self._json(response, "/step")
         observation = payload.get("observation")
         if isinstance(observation, dict) and "current_agent" in observation:
             current_agent = observation.get("current_agent")
