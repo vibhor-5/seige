@@ -1,3 +1,11 @@
+---
+title: Seige
+emoji: 🛡️
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 8000
+---
 # seige: Adversarial Oversight via Mechanistic Interpretability
 
 > Red attacks at the activation level. Blue defends by reading the machine's mind.
@@ -30,7 +38,7 @@ mechanistic level — the first reproducible RL testbed for this problem.
 ## Models
 
 - Target model: `google/gemma-4-E2B`
-- Red/Blue agent model: `unsloth/Qwen3-14B`
+- Red/Blue agent model: `google/gemma-4-E4B`
 
 The target model is a prop loaded by the environment server. Red and Blue agents are text-in/text-out policies trained separately with GRPO.
 
@@ -73,11 +81,11 @@ python -m uvicorn server.app:app --host 0.0.0.0 --port 8000
 In a separate training job:
 
 ```bash
-SEIGE_AGENT_MODEL_ID=unsloth/Qwen3-14B \
+SEIGE_AGENT_MODEL_ID=google/gemma-4-E4B \
 SEIGE_ENV_URL=http://localhost:8000 \
 python train/grpo_red.py
 
-SEIGE_AGENT_MODEL_ID=unsloth/Qwen3-14B \
+SEIGE_AGENT_MODEL_ID=google/gemma-4-E4B \
 SEIGE_ENV_URL=http://localhost:8000 \
 python train/grpo_blue.py
 ```

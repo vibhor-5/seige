@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 
 
-AGENT_MODEL_ID = os.getenv("SEIGE_AGENT_MODEL_ID", "unsloth/Qwen3-14B")
+AGENT_MODEL_ID = os.getenv("SEIGE_AGENT_MODEL_ID", "google/gemma-4-E4B")
 TARGET_MODEL_ID = os.getenv("SEIGE_TARGET_MODEL_ID", "google/gemma-4-E2B")
 ENV_URL = os.getenv("SEIGE_ENV_URL", "http://localhost:8000")
 WANDB_PROJECT = os.getenv("WANDB_PROJECT", "seige")

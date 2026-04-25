@@ -16,3 +16,13 @@ dependencies:
 spaces_url: https://huggingface.co/spaces/YOUR_USERNAME/seige
 blog_url: https://huggingface.co/blog/YOUR_USERNAME/seige
 video_url: https://youtube.com/YOUR_VIDEO
+
+client:
+  class_name: SeigeOpenEnvClient
+  module: client
+action:
+  class_name: SeigeAction
+  module: models
+observation:
+  class_name: SeigeObservation
+  module: models
