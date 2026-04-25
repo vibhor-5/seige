@@ -131,13 +131,18 @@ install_dependencies() {
         echo "Torch not found. Installing torch/torchvision/torchaudio via pip from $TORCH_INDEX_URL"
         "$PYTHON_BIN" -m ensurepip --upgrade >/dev/null 2>&1 || true
         "$PYTHON_BIN" -m pip install --upgrade pip setuptools wheel >/dev/null 2>&1 || true
-        "$PYTHON_BIN" -m pip install --index-url "$TORCH_INDEX_URL" "torch>=$TORCH_MIN_VERSION" torchvision torchaudio
+        if ! "$PYTHON_BIN" -m pip install --index-url "$TORCH_INDEX_URL" "torch>=$TORCH_MIN_VERSION" torchvision torchaudio; then
+            echo "Torch index install failed. Retrying from default pip index..."
+            "$PYTHON_BIN" -m pip install "torch>=$TORCH_MIN_VERSION" torchvision torchaudio
+        fi
     fi
 
     # Hard verification + fallback path when uv/pip environment wiring is inconsistent.
     if ! "$PYTHON_BIN" -c "import torch; print(torch.__version__)" >/dev/null 2>&1; then
         echo "Torch import still failing after pip install. Retrying with no cache..."
-        "$PYTHON_BIN" -m pip install --no-cache-dir --index-url "$TORCH_INDEX_URL" "torch>=$TORCH_MIN_VERSION" torchvision torchaudio
+        if ! "$PYTHON_BIN" -m pip install --no-cache-dir --index-url "$TORCH_INDEX_URL" "torch>=$TORCH_MIN_VERSION" torchvision torchaudio; then
+            "$PYTHON_BIN" -m pip install --no-cache-dir "torch>=$TORCH_MIN_VERSION" torchvision torchaudio
+        fi
     fi
 
     if ! "$PYTHON_BIN" -c "import torch; print(torch.__version__)" >/dev/null 2>&1; then
@@ -163,7 +168,9 @@ PY
     # Transformers 5.x quantization path requires torch.nn.Module.set_submodule.
     if ! "$PYTHON_BIN" -c "import torch; raise SystemExit(0 if hasattr(torch.nn.Module, 'set_submodule') else 1)"; then
         echo "Torch API incompatible (missing nn.Module.set_submodule). Upgrading torch stack..."
-        "$PYTHON_BIN" -m pip install --upgrade --index-url "$TORCH_INDEX_URL" "torch>=$TORCH_MIN_VERSION" torchvision torchaudio
+        if ! "$PYTHON_BIN" -m pip install --upgrade --index-url "$TORCH_INDEX_URL" "torch>=$TORCH_MIN_VERSION" torchvision torchaudio; then
+            "$PYTHON_BIN" -m pip install --upgrade "torch>=$TORCH_MIN_VERSION" torchvision torchaudio
+        fi
     fi
 
     if ! "$PYTHON_BIN" -c "import torch; raise SystemExit(0 if hasattr(torch.nn.Module, 'set_submodule') else 1)"; then
@@ -235,6 +242,16 @@ PY
     echo "Dependency bootstrap complete."
 }
 
+preflight_runtime_checks() {
+    echo "Running runtime preflight checks..."
+    if ! "$PYTHON_BIN" -c "import torch, datasets, requests, fastapi, uvicorn, trl, peft, wandb" >/dev/null 2>&1; then
+        echo "ERROR: Missing required runtime dependencies for $PYTHON_BIN."
+        echo "Run with INSTALL_DEPS=1 (default) or install from requirements.txt manually."
+        "$PYTHON_BIN" -c "import sys; print('python=', sys.executable); print('prefix=', sys.prefix)"
+        exit 1
+    fi
+}
+
 start_opponent_server() {
     local opponent_type=$1
     local adapter_path=$2
@@ -279,6 +296,7 @@ train_leg() {
 if [ "$INSTALL_DEPS" == "1" ]; then
     install_dependencies
 fi
+preflight_runtime_checks
 
 # 1. Start the Environment Server
 echo "[1/4] Starting Target Environment Server on port $PORT_ENV..."

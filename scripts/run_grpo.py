@@ -85,6 +85,23 @@ def parse_args():
 def _use_fast_inference() -> bool:
     return os.getenv("SEIGE_FAST_INFERENCE", "0") == "1"
 
+def _load_in_4bit() -> bool:
+    return os.getenv("SEIGE_LOAD_IN_4BIT", "1") == "1"
+
+def _max_seq_length() -> int:
+    return int(os.getenv("SEIGE_AGENT_MAX_SEQ_LENGTH", "2048"))
+
+def _ensure_trl_warnings_issued_attr(model) -> None:
+    # TRL GRPOTrainer expects model.warnings_issued to exist. Some PEFT-wrapped
+    # model stacks don't surface this attribute, so we create it eagerly.
+    if not hasattr(model, "warnings_issued"):
+        model.warnings_issued = {}
+    # Defensive: also ensure nested models expose the same mutable dict.
+    for attr in ("base_model", "model"):
+        nested = getattr(model, attr, None)
+        if nested is not None and not hasattr(nested, "warnings_issued"):
+            nested.warnings_issued = model.warnings_issued
+
 def main():
     args = parse_args()
     
@@ -94,11 +111,11 @@ def main():
     env_client = SeigeClient(base_url=args.env_url)
     
     print(f"Loading Base Model ({args.base_model}) & Init Adapter ({args.init_adapter})...")
-    max_seq_length = 2048
+    max_seq_length = _max_seq_length()
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=args.base_model,
         max_seq_length=max_seq_length,
-        load_in_4bit=True,
+        load_in_4bit=_load_in_4bit(),
         fast_inference=_use_fast_inference(),
     )
     
@@ -119,6 +136,8 @@ def main():
         model.load_adapter(args.init_adapter)
     else:
         print(f"WARNING: Init adapter '{args.init_adapter}' not found. Training from base model.")
+
+    _ensure_trl_warnings_issued_attr(model)
 
     # REWARD FUNCTIONS
     def format_reward_func(prompts: List[str], completions: List[str], **kwargs) -> List[float]:
