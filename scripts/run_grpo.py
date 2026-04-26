@@ -6,6 +6,7 @@ import hashlib
 import warnings
 import shutil
 import torch
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List
 from collections import defaultdict
 from pathlib import Path
@@ -812,8 +813,22 @@ def main():
         c_rar: list[float] = []
         n_bad_json = 0
 
-        for j, completion in enumerate(completions):
-            act, gate, why = _parse_action_and_format_gate(completion, args.agent_type)
+        parsed = [_parse_action_and_format_gate(c, args.agent_type) for c in completions]
+        env_results: dict[int, tuple[float, dict]] = {}
+        valid = [(j, act) for j, (act, gate, _) in enumerate(parsed) if act is not None and gate >= 0.0]
+        if valid:
+            max_workers = int(os.getenv("SEIGE_REWARD_ENV_MAX_WORKERS", "8"))
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                futures = {pool.submit(score_action, act): j for j, act in valid}
+                for future in as_completed(futures):
+                    j = futures[future]
+                    try:
+                        env_results[j] = future.result()
+                    except Exception as ex:  # noqa: BLE001
+                        print(f"Env reward step failed: {ex}")
+                        env_results[j] = (0.0, {})
+
+        for j, (act, gate, why) in enumerate(parsed):
             if why in ("json_decode", "not_object"):
                 n_bad_json += 1
             inv = rw["invalid"] * ramp * (gate if gate < 0.0 else 0.0)
@@ -830,36 +845,25 @@ def main():
                 c_rar.append(r_div[j])
                 continue
 
-            try:
-                raw, info = score_action(act)
-                e_st = _env_reward_shaped(raw)
-                d_bonus = _dense_outcome_bonus(info, args.agent_type) if isinstance(info, dict) else 0.0
-                if isinstance(info, dict) and info.get("error"):
-                    d_bonus -= 0.45
+            raw, info = env_results.get(j, (0.0, {}))
+            e_st = _env_reward_shaped(raw)
+            d_bonus = _dense_outcome_bonus(info, args.agent_type) if isinstance(info, dict) else 0.0
+            if isinstance(info, dict) and info.get("error"):
+                d_bonus -= 0.45
 
-                fp = _action_fingerprint(act)
-                k = recent_action_counts[fp]
-                recent_action_counts[fp] = k + 1
-                rep = -rw["repeat_penalty"] * min(6.0, float(k))
+            fp = _action_fingerprint(act)
+            k = recent_action_counts[fp]
+            recent_action_counts[fp] = k + 1
+            rep = -rw["repeat_penalty"] * min(6.0, float(k))
 
-                t = inv + rw["env"] * e_st + rw["bonus"] * d_bonus + rep + r_div[j]
-                pre_tie.append(t)
-                pre_env.append(e_st)
-                c_invalid.append(inv)
-                c_env.append(rw["env"] * e_st)
-                c_bon.append(rw["bonus"] * d_bonus)
-                c_rep.append(rep)
-                c_rar.append(r_div[j])
-            except Exception as ex:  # noqa: BLE001
-                print(f"Env reward step failed: {ex}")
-                t = inv + 0.0 * rw["env"] + 0.0 * rw["bonus"] + (-rw["repeat_penalty"]) + r_div[j]
-                pre_tie.append(t)
-                pre_env.append(0.0)
-                c_invalid.append(inv)
-                c_env.append(0.0)
-                c_bon.append(0.0)
-                c_rep.append(-rw["repeat_penalty"])
-                c_rar.append(r_div[j])
+            t = inv + rw["env"] * e_st + rw["bonus"] * d_bonus + rep + r_div[j]
+            pre_tie.append(t)
+            pre_env.append(e_st)
+            c_invalid.append(inv)
+            c_env.append(rw["env"] * e_st)
+            c_bon.append(rw["bonus"] * d_bonus)
+            c_rep.append(rep)
+            c_rar.append(r_div[j])
 
         tbon = _tiebreak_if_flat(hlist, pre_env, rw["tiebreak"])
         rewards = [pre_tie[i] + tbon[i] for i in range(len(pre_tie))]
@@ -925,8 +929,8 @@ def main():
         save_steps=int(os.getenv("SEIGE_SAVE_STEPS", "50")),
         per_device_train_batch_size=per_bs,
         gradient_accumulation_steps=grad_acc,
-        max_prompt_length=int(os.getenv("SEIGE_GRPO_MAX_PROMPT_LENGTH", "512")),
-        max_completion_length=int(os.getenv("SEIGE_GRPO_MAX_COMPLETION_LENGTH", "192")),
+        max_prompt_length=int(os.getenv("SEIGE_GRPO_MAX_PROMPT_LENGTH", "256")),
+        max_completion_length=int(os.getenv("SEIGE_GRPO_MAX_COMPLETION_LENGTH", "64")),
         num_generations=num_gen,
         max_steps=args.max_steps,
         # Higher-temperature rollouts = more within-group spread (GRPO++ / open recipes).
