@@ -137,13 +137,17 @@ def sanitize_action(action: dict, current_agent: str, observation: dict) -> dict
     if not fallback_session:
         visible = observation.get("sessions_visible", []) if isinstance(observation, dict) else []
         fallback_session = visible[0] if visible else "sess_0"
+    fallback_session = str(fallback_session)
     action_type = str(action.get("action_type") or "monitor")
     if action_type not in VALID_BLUE_ACTIONS:
         action_type = "monitor"
+    session_id = str(action.get("session_id") or fallback_session)
+    if not session_id.startswith("sess_"):
+        session_id = fallback_session
     cleaned = {
         "agent_type": "blue",
         "action_type": action_type,
-        "session_id": str(action.get("session_id") or fallback_session),
+        "session_id": session_id,
     }
     if action.get("layer") is not None:
         try:
@@ -197,6 +201,8 @@ def main():
         ep_blue_reward = 0
         
         while not done and step < args.max_steps_per_episode:
+            if not isinstance(obs, dict):
+                obs = {}
             current_agent = obs.get("current_agent", "red" if step % 2 == 0 else "blue")
             
             print(f"Step {step} | Agent: {current_agent}")
@@ -218,7 +224,8 @@ def main():
                 print(f"{sys_name} Action: {action}")
                 
                 result = env_client.step(action)
-                obs = result.get("observation", {})
+                next_obs = result.get("observation", {})
+                obs = next_obs if isinstance(next_obs, dict) else {}
                 reward = result.get("reward", 0.0)
                 done = result.get("done", False)
                 

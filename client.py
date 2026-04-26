@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import requests
+import os
 
 try:
     from openenv.core import EnvClient
@@ -61,7 +62,7 @@ class SeigeClient:
 
     def step(self, action: dict[str, Any]) -> dict:
         response = self._post("/step", {"action": action})
-        if response.status_code == 422:
+        if response.status_code == 422 and os.getenv("SEIGE_ALLOW_LEGACY_RAW_STEP", "0") == "1":
             # Older compatibility servers accepted the raw action body; OpenEnv
             # create_app expects {"action": ...}. Retry raw only for old servers.
             response = self._post("/step", action)
