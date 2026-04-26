@@ -204,6 +204,8 @@ def main():
             if not isinstance(obs, dict):
                 obs = {}
             current_agent = obs.get("current_agent", "red" if step % 2 == 0 else "blue")
+            if current_agent == "both":
+                current_agent = "red" if step % 2 == 0 else "blue"
             
             print(f"Step {step} | Agent: {current_agent}")
             
@@ -224,6 +226,8 @@ def main():
                 print(f"{sys_name} Action: {action}")
                 
                 result = env_client.step(action)
+                if not isinstance(result, dict):
+                    raise RuntimeError(f"invalid step result type: {type(result).__name__}")
                 next_obs = result.get("observation", {})
                 obs = next_obs if isinstance(next_obs, dict) else {}
                 reward = result.get("reward", 0.0)
