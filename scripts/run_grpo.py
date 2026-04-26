@@ -883,9 +883,9 @@ def main():
         agent_type=args.agent_type,
     )
     
-    per_bs = int(os.getenv("SEIGE_GRPO_PER_DEVICE_BATCH", "2"))
-    grad_acc = int(os.getenv("SEIGE_GRPO_GRAD_ACCUM", "2"))
-    num_gen = int(os.getenv("SEIGE_GRPO_NUM_GENERATIONS", "2"))
+    per_bs = int(os.getenv("SEIGE_GRPO_PER_DEVICE_BATCH", "4"))
+    grad_acc = int(os.getenv("SEIGE_GRPO_GRAD_ACCUM", "4"))
+    num_gen = int(os.getenv("SEIGE_GRPO_NUM_GENERATIONS", "4"))
     print(
         f"GRPO microbatch: per_device={per_bs} grad_accum={grad_acc} num_generations={num_gen} "
         f"(~{per_bs * grad_acc * num_gen} reward evals / optimizer step, order of magnitude)",
