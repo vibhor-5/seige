@@ -883,6 +883,14 @@ def main():
         agent_type=args.agent_type,
     )
     
+    per_bs = int(os.getenv("SEIGE_GRPO_PER_DEVICE_BATCH", "2"))
+    grad_acc = int(os.getenv("SEIGE_GRPO_GRAD_ACCUM", "2"))
+    num_gen = int(os.getenv("SEIGE_GRPO_NUM_GENERATIONS", "2"))
+    print(
+        f"GRPO microbatch: per_device={per_bs} grad_accum={grad_acc} num_generations={num_gen} "
+        f"(~{per_bs * grad_acc * num_gen} reward evals / optimizer step, order of magnitude)",
+        flush=True,
+    )
     # Configure GRPO
     training_args = GRPOConfig(
         output_dir=agent_output_dir,
@@ -890,11 +898,11 @@ def main():
         logging_steps=5,
         eval_steps=20,
         save_steps=int(os.getenv("SEIGE_SAVE_STEPS", "50")),
-        per_device_train_batch_size=4,
-        gradient_accumulation_steps=4,
+        per_device_train_batch_size=per_bs,
+        gradient_accumulation_steps=grad_acc,
         max_prompt_length=int(os.getenv("SEIGE_GRPO_MAX_PROMPT_LENGTH", "512")),
         max_completion_length=int(os.getenv("SEIGE_GRPO_MAX_COMPLETION_LENGTH", "192")),
-        num_generations=int(os.getenv("SEIGE_GRPO_NUM_GENERATIONS", "4")),
+        num_generations=num_gen,
         max_steps=args.max_steps,
         # Higher-temperature rollouts = more within-group spread (GRPO++ / open recipes).
         temperature=float(os.getenv("SEIGE_GRPO_TEMPERATURE", "0.82")),

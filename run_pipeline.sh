@@ -20,8 +20,9 @@ fi
 # SEQUENTIAL_MODE=1 runs alternating Red/Blue training in a loop.
 SEQUENTIAL_MODE=${SEQUENTIAL_MODE:-"1"}
 NUM_CYCLES=${NUM_CYCLES:-"1"}
-GRPO_MAX_STEPS=${GRPO_MAX_STEPS:-"200"}
-NUM_EPISODES=${NUM_EPISODES:-"100"}
+# Shorter defaults keep cloud runs tractable; override in .env for long runs.
+GRPO_MAX_STEPS=${GRPO_MAX_STEPS:-"32"}
+NUM_EPISODES=${NUM_EPISODES:-"40"}
 INSTALL_DEPS=${INSTALL_DEPS:-"1"}
 UNINSTALL_TORCHAO=${UNINSTALL_TORCHAO:-"1"}
 # PyTorch 2.6+ wheels use cu124/cu126; cu121 often tops out at 2.5.x. Driver CUDA 12.x is compatible.
