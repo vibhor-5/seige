@@ -128,6 +128,18 @@ def _max_seq_length() -> int:
     return int(os.getenv("SEIGE_AGENT_MAX_SEQ_LENGTH", "2048"))
 
 
+def _lora_config() -> tuple[int, int, list[str]]:
+    r = int(os.getenv("SEIGE_LORA_R", "8"))
+    alpha = int(os.getenv("SEIGE_LORA_ALPHA", "16"))
+    raw = (os.getenv("SEIGE_LORA_TARGET_MODULES", "") or "").strip()
+    if raw:
+        modules = [m.strip() for m in raw.split(",") if m.strip()]
+    else:
+        # Attention only (no MLP): fewer trainable params than full 7-tensor Unsloth default.
+        modules = ["q_proj", "k_proj", "v_proj", "o_proj"]
+    return r, alpha, modules
+
+
 def _reward_red_opponent_check_enabled() -> bool:
     # Expensive: this is an auxiliary detection check, not red's primary reward.
     # Keep it off by default because it adds one frozen-blue generation per rollout.
@@ -678,15 +690,27 @@ def main():
         fast_inference=_use_fast_inference(),
     )
     
-    # Set PEFT / LoRA params
+    # Set PEFT / LoRA params (defaults: r=8, alpha=16, attention-only — override via SEIGE_LORA_*)
+    lora_r, lora_alpha, lora_modules = _lora_config()
+    print(
+        f"LoRA: r={lora_r} alpha={lora_alpha} modules={lora_modules} "
+        f"(set SEIGE_LORA_R, SEIGE_LORA_ALPHA, SEIGE_LORA_TARGET_MODULES to tune)",
+        flush=True,
+    )
     model = FastLanguageModel.get_peft_model(
         model,
-        r=16,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-        lora_alpha=32,
+        r=lora_r,
+        target_modules=lora_modules,
+        lora_alpha=lora_alpha,
         lora_dropout=0,
         bias="none",
-        use_gradient_checkpointing="unsloth", 
+        use_gradient_checkpointing="unsloth",
+    )
+    _trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    _total = sum(p.numel() for p in model.parameters())
+    print(
+        f"Trainable (LoRA) = {_trainable:,} of {_total:,} ({100.0 * _trainable / max(1, _total):.2f}%)",
+        flush=True,
     )
     
     # Load initialization weights on top of our PEFT model.

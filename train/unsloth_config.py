@@ -43,8 +43,15 @@ WANDB_PROJECT = os.getenv("WANDB_PROJECT", "seige")
 
 MAX_SEQ_LENGTH = int(os.getenv("SEIGE_AGENT_MAX_SEQ_LENGTH", "4096"))
 LOAD_IN_4BIT = os.getenv("SEIGE_LOAD_IN_4BIT", "1") == "1"
-LORA_R = int(os.getenv("SEIGE_LORA_R", "16"))
-LORA_ALPHA = int(os.getenv("SEIGE_LORA_ALPHA", "32"))
+LORA_R = int(os.getenv("SEIGE_LORA_R", "8"))
+LORA_ALPHA = int(os.getenv("SEIGE_LORA_ALPHA", "16"))
+
+
+def lora_target_modules() -> list[str]:
+    raw = (os.getenv("SEIGE_LORA_TARGET_MODULES", "") or "").strip()
+    if raw:
+        return [m.strip() for m in raw.split(",") if m.strip()]
+    return ["q_proj", "k_proj", "v_proj", "o_proj"]
 
 
 def grpo_config(output_dir: str, run_name: str):
@@ -86,6 +93,6 @@ def load_agent_model():
         model,
         r=LORA_R,
         lora_alpha=LORA_ALPHA,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        target_modules=lora_target_modules(),
     )
     return model, tokenizer
