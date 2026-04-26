@@ -540,6 +540,16 @@ def _latest_checkpoint_dir(output_dir: str) -> str | None:
     candidates.sort(key=lambda x: x[0])
     return candidates[-1][1]
 
+
+def _checkpoint_step(path: str) -> int | None:
+    name = Path(path).name
+    if not name.startswith("checkpoint-"):
+        return None
+    try:
+        return int(name.split("-")[-1])
+    except ValueError:
+        return None
+
 def _invalid_penalty_ramp(reward_call_idx: int) -> float:
     """Slightly softer invalid-JSON penalty at the very start; outcome signal dominates after ramp."""
     ramp = int(os.getenv("SEIGE_INVALID_PENALTY_RAMP_STEPS", "0"))
@@ -951,6 +961,15 @@ def main():
 
     print("Starting GRPO Training...")
     resume_ckpt = _latest_checkpoint_dir(agent_output_dir) if args.resume_if_possible else None
+    if resume_ckpt:
+        step = _checkpoint_step(resume_ckpt)
+        if step is not None and step >= args.max_steps:
+            print(
+                f"Latest checkpoint step ({step}) >= requested max_steps ({args.max_steps}); "
+                "starting fresh instead of resuming.",
+                flush=True,
+            )
+            resume_ckpt = None
     if resume_ckpt:
         print(f"Resuming training from checkpoint: {resume_ckpt}")
         trainer.train(resume_from_checkpoint=resume_ckpt)
