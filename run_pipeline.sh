@@ -1,6 +1,21 @@
 #!/bin/bash
 set -e
 
+# Optional secrets / run config (gitignored). Load before defaults so exports take effect.
+# On remote hosts, copy your local `.env` to the repo as `.env` or `.env.remote` (latter wins).
+if [ -f .env ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source .env
+    set +a
+fi
+if [ -f .env.remote ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source .env.remote
+    set +a
+fi
+
 # Default values if not provided via environment variables.
 # SEQUENTIAL_MODE=1 runs alternating Red/Blue training in a loop.
 SEQUENTIAL_MODE=${SEQUENTIAL_MODE:-"1"}
