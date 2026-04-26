@@ -135,8 +135,9 @@ def _lora_config() -> tuple[int, int, list[str]]:
     if raw:
         modules = [m.strip() for m in raw.split(",") if m.strip()]
     else:
-        # Attention only (no MLP): fewer trainable params than full 7-tensor Unsloth default.
-        modules = ["q_proj", "k_proj", "v_proj", "o_proj"]
+        # q+v only: common efficient LoRA (often most of the benefit vs training q,k,v,o or MLP).
+        # Set SEIGE_LORA_TARGET_MODULES to override, e.g. "q_proj,k_proj,v_proj,o_proj" or add gate_proj,...
+        modules = ["q_proj", "v_proj"]
     return r, alpha, modules
 
 

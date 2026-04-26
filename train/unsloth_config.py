@@ -51,7 +51,7 @@ def lora_target_modules() -> list[str]:
     raw = (os.getenv("SEIGE_LORA_TARGET_MODULES", "") or "").strip()
     if raw:
         return [m.strip() for m in raw.split(",") if m.strip()]
-    return ["q_proj", "k_proj", "v_proj", "o_proj"]
+    return ["q_proj", "v_proj"]
 
 
 def grpo_config(output_dir: str, run_name: str):
